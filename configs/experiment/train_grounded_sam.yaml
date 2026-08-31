@@ -1,0 +1,171 @@
+# @package _global_
+#
+# configs/experiment/train_grounded_sam.yaml
+# ------------------------------------------
+# Grounded-SAM training experiment. Reuses the ENTIRE segmentation pipeline
+# (grounded_sam_training.py, SegJsonDataModule, the struct LoRA + mapper) and swaps only:
+#   • the encoder slot     -> identity (skip_encode=True feeds precomputed maps straight to the mapper)
+#   • the data module      -> grounded_sam_jsonl (this branch's own 28-class CARLA manifests)
+# Everything else (LoRA rank/mode, LR, schedule, grid knobs) is identical to the
+# SegFormer config so results stay comparable.
+#
+# Differences from train_seg.yaml are flagged inline with "DIFF:".
+
+defaults:
+  - /lora@lora.struct: struct
+  - override /lora/encoder@lora.struct.encoder: identity           # unused at train time: skip_encode=True bypasses it
+  - override /lora/mapper_network@lora.struct.mapper_network: segidXL  # class-ID embedding conditioning, not RGB colorize (2026-08-25)
+  - override /model: sdxl
+  - override /data: grounded_sam_jsonl                              # DIFF: Grounded-SAM manifests (was segformer_jsonl)
+  - _self_
+
+# =============================================================================
+# MODEL LOADING — LOCAL vs INTERNET  (one switch: local_files_only)
+# =============================================================================
+# With the DEFAULT identity encoder (unused at train time, skip_encode=True
+# bypasses it), only the base diffusion model below actually gets loaded.
+# dino_model_path/sam_model_path exist here ONLY so the OPT-IN live-mIoU path
+# (grounded_sam_training.py: swap lora/encoder@lora.struct.encoder to
+# grounded_sam.yaml) has somewhere to resolve local paths from -- without
+# these two keys, that swap would try to hit the network with
+# local_files_only=true and fail loudly. Same values as inference_grounded_sam.yaml.
+local_files_only: true
+dino_model_path: checkpoints/local_models/grounding-dino-tiny
+dino_model_name: IDEA-Research/grounding-dino-tiny
+sam_model_path: checkpoints/local_models/sam-vit-base
+sam_model_name: facebook/sam-vit-base
+
+# SDXL, not SD1.5 — SETTLED. The real dataset is natively
+# 1280x800; SDXL needs H/W divisible by 32 (satisfied as-is), SD1.5 needs /64
+# (NOT satisfied) and would force a distorting resize. Download via:
+# python download_models.py
+base_model_name:  stabilityai/stable-diffusion-xl-base-1.0
+base_model_path:  checkpoints/local_models/stable-diffusion-xl-base-1.0
+
+# SDXL's own VAE is numerically unstable in fp16 -- madebyollin/sdxl-vae-fp16-fix
+# is REQUIRED, not optional. See model.vae_path below and src/model.py
+# ModelBase.__init__. checkpoints/local_models/ is gitignored; this absolute
+# path is the shared copy used by both branches, no duplication.
+vae_local_path: checkpoints/local_models/sdxl-vae-fp16-fix
+
+# =============================================================================
+# HARDWARE — plain, fixed values. Nothing auto-scales at runtime.
+# =============================================================================
+#   Multi-GPU: accelerate launch --num_processes=N grounded_sam_training.py experiment=train_grounded_sam
+gradient_checkpointing: true            # ON: verified on the local single 12GB dev GPU. Pure
+                                        # recompute-vs-store speed/VRAM tradeoff, mathematically
+                                        # IDENTICAL training results either way. On a large
+                                        # multi-GPU box (95GB/GPU) it isn't needed -- SDXL's UNet
+                                        # is FROZEN, only the ~20M LoRA + ~1.2M mapper params carry
+                                        # gradients/optimizer state -- so flip to false there for
+                                        # free speed. (batch_size is NOT bumped to match -- that
+                                        # changes gradient dynamics, a real decision, not free.)
+gradient_accumulation_steps: 1          # 4 batch x 1 accum = 4 effective batch
+size: [1280, 800]                       # [width, height] -- the real dataset's NATIVE resolution,
+                                        # no resize at all (1280/800 = 1.6). Divisible by 32, which
+                                        # is all SDXL needs (VAE/8 x 2 UNet halvings/4) -- unlike
+                                        # SD1.5's /64, which is why SD1.5 would have to distort this
+                                        # dataset. Enforced by a ValueError guard in
+                                        # grounded_sam_training.py: a bad size fails loudly at
+                                        # startup, never silently misaligns mid-run.
+
+# --- Resize technique --- #
+# "aspect" (only mode supported) = direct resize to the non-square `size`
+#   above -- NO pad, NO crop. At 1280x800 on the real dataset this is a no-op.
+# MUST match the mode grounded_sam_map_calculations.py used to compute your maps.
+resize_mode: aspect
+
+# =============================================================================
+# 1. GENERAL TRAINING PARAMETERS
+# =============================================================================
+# Dataset math is NOT filled in here, deliberately: only a 20-image train /
+# 5-image val dev subset has been computed so far (grounded_sam_map_calculations.py
+# has never been run at full scale). Writing a steps/epoch figure for a
+# dataset that doesn't exist yet would be a fabricated number. Recompute
+# val_steps/ckpt_steps for your real effective batch once the full manifest
+# is built -- these are STEP counts, so they shift with effective batch.
+learning_rate: 1e-4
+lr_scheduler: constant
+epochs: 10
+
+# DECOUPLED triggers: validate cheaply often, save weights+images less often.
+val_steps:  3000
+ckpt_steps: 3000
+
+# =============================================================================
+# 2. DATA  (DIFF: Grounded-SAM manifests, 28-class CARLA vocabulary)
+# =============================================================================
+# The class vocabulary lives in code, not config: CARLA_CLASSES / CARLA_PALETTE
+# in src/encoders/grounded_sam_encoder.py (28 classes), read at load time by
+# src/data/local_seg.py. Segformer's branch keeps its own 19-class scheme --
+# the two are deliberately NOT interchangeable.
+data:
+  batch_size:     4
+  val_batch_size: 1
+  workers:        4
+  val_workers:    1
+  # DIFF: Grounded-SAM manifests built by grounded_sam_map_calculations.py.
+  # val_jsonl must be the real val split — NEVER test.
+  # Still the 20/5-image dev subset -- repoint at your full-dataset manifest.
+  train_jsonl: data/dataset/extracted_seg_map_grounded_sam/train.jsonl
+  val_jsonl:   data/dataset/extracted_seg_map_grounded_sam/val.jsonl
+
+# =============================================================================
+# 3. GLOBAL FALLBACK PROMPT
+# =============================================================================
+prompt: null    # null -> each image uses its own prompt field from the JSONL
+
+# =============================================================================
+# 4. OPERATIONAL SETTINGS
+# =============================================================================
+seed: 42
+val_batches: 4
+n_grid_images: 10                # number of validation images per checkpoint (5 fixed + 5 fresh)
+log_c: true     # log the conditioning map alongside each validation image
+                # Validation grids -> <output_dir>/val_grids/step<N>.png
+
+# =============================================================================
+# 5. PRECISION
+# =============================================================================
+# bf16 is always on -- hardcoded as mixed_precision="bf16" on the Accelerator
+# in grounded_sam_training.py, not a config knob.
+ignore_check: true                 # silences the checkpoint-key completeness assert in add_lora_from_config
+tag: grounded_sam                  # DIFF: outputs/train/grounded_sam/...
+
+# =============================================================================
+# 6. MODEL OVERRIDES
+# =============================================================================
+model:
+  _target_: src.model.SDXL
+  pipeline_type: diffusers.StableDiffusionXLPipeline
+  model_name: ${base_model_name}   # grounded_sam_training.py overrides to base_model_path when local
+  local_files_only: ${local_files_only}
+  guidance_scale: 7.5
+  vae_path: madebyollin/sdxl-vae-fp16-fix   # overridden to vae_local_path when local, see src/model.py ModelBase.__init__
+
+# =============================================================================
+# 7. LORA ARCHITECTURE  (identical to the SegFormer config)
+# =============================================================================
+lora:
+  struct:
+    optimize: true
+    cfg: false                     # classifier-free-guidance dropout on the structure conditioning
+                                   # is OFF (src/model.py gates self.c_dropout's random structure-
+                                   # masking on this). Consider `true` for a real training run: it
+                                   # forces the model to sometimes train with zero structure signal,
+                                   # the standard ControlNet/T2I-Adapter technique for making
+                                   # conditioning genuinely load-bearing instead of easy to ignore.
+    ckpt_path: null                # set to resume, e.g. "outputs/train/grounded_sam/runs/.../checkpoint-3000"
+    encoder:                       # DIFF: identity slot filler (no `model` key) -- skip_encode=True
+      _target_: torch.nn.Identity  #       means no encoder is ever called at train time
+    config:
+      adaption_mode: only_res_conv
+      rank: 128
+      c_dim: 128
+      lora_cls: NewStructLoRAConv
+      lora_scale: 1
+
+# LAUNCH:
+#   Single GPU : python grounded_sam_training.py experiment=train_grounded_sam
+#   Multi-GPU  : accelerate launch --num_processes=N grounded_sam_training.py experiment=train_grounded_sam
+#                (effective batch = data.batch_size x gradient_accumulation_steps x N)

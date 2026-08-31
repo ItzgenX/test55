@@ -1,0 +1,249 @@
+# @package _global_
+#
+# configs/experiment/train_grounded_sam_cluster.yaml
+# --------------------------------------------------
+# Cluster variant of train_grounded_sam.yaml. Same architecture, same 28-class
+# CARLA pipeline -- only the HARDWARE-shaped values differ, sized for the real
+# sbatch allocation:
+#
+#   #SBATCH --nodes=1
+#   #SBATCH --ntasks-per-node=4       -> accelerate --num_processes=4
+#   #SBATCH --cpus-per-task=12        -> dataloader workers budget per process
+#   #SBATCH --gres=gpu:4              -> 4 GPUs, one per task
+#   #SBATCH --time=10:00:00           -> HARD 10h wall clock (see CHECKPOINTING)
+#
+# NOT benchmarked on that hardware -- the only measured numbers in this repo
+# come from a single 12GB dev GPU. Treat every value below as a documented
+# starting point to verify in the first ~200 steps, not a tuned result.
+#
+# Differences from train_grounded_sam.yaml are flagged inline with "CLUSTER:".
+
+defaults:
+  - /lora@lora.struct: struct
+  - override /lora/encoder@lora.struct.encoder: identity           # unused at train time: skip_encode=True bypasses it
+  - override /lora/mapper_network@lora.struct.mapper_network: segidXL  # class-ID embedding conditioning, not RGB colorize -- must match train_grounded_sam.yaml, data.conditioning=classid
+  - override /model: sdxl
+  - override /data: grounded_sam_jsonl
+  - _self_
+
+# =============================================================================
+# MODEL LOADING — LOCAL vs INTERNET  (one switch: local_files_only)
+# =============================================================================
+# With the DEFAULT identity encoder (unused at train time, skip_encode=True
+# reads pre-saved maps), only the base diffusion model below actually gets
+# loaded. dino_model_path/sam_model_path exist here ONLY so the OPT-IN
+# live-mIoU path (grounded_sam_training.py: swap lora/encoder@lora.struct.encoder
+# to grounded_sam.yaml) has somewhere to resolve local paths from -- without
+# these two keys, that swap would try to hit the network with
+# local_files_only=true and fail loudly.
+local_files_only: true
+
+# CLUSTER: paths must point at the cluster filesystem, NOT this dev box's D:/.
+# Copy checkpoints/local_models/ across and set these before the first run.
+#
+# HOW THIS ACTUALLY WORKS (so you know it's safe to just edit these lines):
+# grounded_sam_training.py resolves each *_path below via
+# os.path.join(repo_root, cfg.xxx_path) at startup, then loads that folder
+# with local_files_only=True -- no network call, no code change needed.
+#   - If you set an ABSOLUTE path (e.g. /scratch/aditya/models/sdxl-base),
+#     os.path.join ignores repo_root and uses your path exactly as written.
+#   - If you set a RELATIVE path (e.g. checkpoints/local_models/sdxl-base,
+#     the dev-box style), it resolves relative to the repo root instead.
+# Either style works -- pick whichever matches how your cluster is laid out.
+# Do this for EVERY line below marked REPLACE; nothing else needs touching.
+base_model_name:  stabilityai/stable-diffusion-xl-base-1.0
+base_model_path:  /path/to/cluster/checkpoints/local_models/stable-diffusion-xl-base-1.0    # REPLACE -- your SDXL checkpoint folder
+
+vae_local_path: /path/to/cluster/checkpoints/local_models/sdxl-vae-fp16-fix                 # REPLACE -- your VAE checkpoint folder
+# dino_model_path/sam_model_path: only read if you swap lora.struct.encoder to
+# the live grounded_sam encoder (see module note near local_files_only above).
+# The DEFAULT identity encoder never loads these -- safe to leave as placeholders
+# unless you're specifically opting into live mIoU during training.
+dino_model_path: /path/to/cluster/checkpoints/local_models/grounding-dino-tiny              # REPLACE (only used if you opt into live mIoU)
+dino_model_name: IDEA-Research/grounding-dino-tiny
+sam_model_path: /path/to/cluster/checkpoints/local_models/sam-vit-base                      # REPLACE (only used if you opt into live mIoU)
+sam_model_name: facebook/sam-vit-base
+
+# =============================================================================
+# HARDWARE — sized for 4x GPU, 12 CPU cores per task.
+# =============================================================================
+# CLUSTER: OFF. This is a pure recompute-vs-store speed/VRAM tradeoff --
+# training results are mathematically IDENTICAL either way. It was ON for the
+# 12GB dev box out of necessity; with large-VRAM GPUs the memory it saves is
+# irrelevant and turning it off buys free step-time. SDXL's UNet is FROZEN --
+# only the ~20M LoRA + ~1.2M mapper params carry gradients/optimizer state --
+# so activations dominate, and there is plenty of headroom.
+gradient_checkpointing: false
+
+# CLUSTER: effective batch = batch_size(8) x accum(1) x GPUs(4) = 32
+# (was 4 on the dev box). Raise batch_size if nvidia-smi shows headroom in
+# the first few hundred steps; that is the cheapest throughput win here.
+gradient_accumulation_steps: 1
+
+size: [1280, 800]                       # unchanged -- native dataset resolution, divisible by 32
+                                        # for SDXL (VAE/8 x 2 UNet halvings/4). Guarded by a
+                                        # ValueError in grounded_sam_training.py.
+resize_mode: aspect
+
+# =============================================================================
+# 1. GENERAL TRAINING PARAMETERS
+# =============================================================================
+# ── DATASET MATH (real custom dataset: 41,679 train / 1,000 val) ────────────
+#   effective batch = batch_size(8) x accum(1) x GPUs(4) = 32
+#   steps / epoch    = ceil(41,679 / 32) = 1,303 optimizer steps
+#   max_train_steps  = 20,000  ->  ~15.4 epochs (this is the binding limit;
+#                                  `epochs: 20` = 26,060 steps, never reached)
+#   ckpt_steps 500   ->  ~2.6 checkpoint saves per epoch
+#
+# CLUSTER: LR scaled for the 8x larger effective batch (4 -> 32). sqrt-scaling
+# gives 1e-4 x sqrt(8) ~= 2.8e-4; linear gives 8e-4. 2e-4 sits deliberately on
+# the conservative side of sqrt -- watch the loss trace over the first ~200
+# steps and back off toward 1e-4 if it spikes or NaNs, or push toward 3e-4 if
+# it is flat and stable. This is a starting point, not a tuned value.
+learning_rate: 2e-4
+lr_scheduler: constant
+epochs: 20
+
+# CLUSTER: max_train_steps is the real budget; epochs above just has to be
+# large enough not to end the run first. A 150-step run on the stand-in data
+# produced output that did not follow the segmentation at all -- conditioning
+# networks of this type generally need thousands to tens of thousands of
+# steps. 20,000 (~15 epochs of the real dataset) is an order-of-magnitude
+# target to monitor against and extend if still improving, NOT a convergence
+# guarantee. Whether it FITS the 10h wall depends entirely on measured s/step
+# on your GPUs: 20,000 steps in 10h requires ~1.8 s/step sustained. Measure
+# the first ~50 steps; if slower, expect to resume across multiple jobs.
+max_train_steps: 20000
+
+# =============================================================================
+# CHECKPOINTING under a 10h wall clock  (READ THIS BEFORE THE FIRST RUN)
+# =============================================================================
+# --time=10:00:00 is a HARD kill. Two verified facts about resume in this repo:
+#   1. save_checkpoint (src/utils.py) writes ONLY lora + mapper weights --
+#      no optimizer state, no global_step, no scheduler state.
+#   2. grounded_sam_training.py sets global_step = 0 unconditionally on start.
+# Consequences: resuming via lora.struct.ckpt_path reloads the trained weights
+# correctly, but AdamW momentum/variance is lost and the step counter restarts.
+# Because lr_scheduler is `constant`, NO learning-rate schedule is lost -- that
+# part is harmless. The optimizer-state reset costs a short re-warm each resume.
+#
+# So: checkpoint often enough that a wall-clock kill is cheap. 500 steps is a
+# starting guess -- MEASURE s/step over the first ~50 steps, then set
+# ckpt_steps so a checkpoint lands roughly every 30-45 min.
+val_steps:  500
+ckpt_steps: 500
+
+# =============================================================================
+# 2. DATA  (28-class CARLA vocabulary)
+# =============================================================================
+# The class vocabulary lives in code: CARLA_CLASSES / CARLA_PALETTE in
+# src/encoders/grounded_sam_encoder.py (28 classes), read at load time by
+# src/data/local_seg.py. The segformer branch keeps its own 19-class scheme --
+# the two are deliberately NOT interchangeable.
+data:
+  # CLUSTER: 12 CPU cores per task -- 8 train + 2 val workers leaves headroom
+  # for the main process and the CUDA/NCCL threads. Do not set workers=12.
+  batch_size:     8
+  val_batch_size: 2
+  workers:        8
+  val_workers:    2
+  # CLUSTER: cluster filesystem paths, and the FULL dataset (41,679 train /
+  # 1,000 val).
+  #
+  # PREREQUISITE -- budget a separate job for this. Training reads PRECOMPUTED
+  # maps; grounded_sam_map_calculations.py must run over all 41,679 images
+  # first, and every image costs a Grounding-DINO detection pass PLUS a SAM
+  # mask pass. That has only ever been run on 20-75 images here, so there is
+  # no measured per-image time to extrapolate from -- but at even ~1 s/image
+  # it is ~11.6 h, i.e. MORE than one 10h allocation on its own. Time a small
+  # batch (--limit_train 200) first, then size the precompute job from that.
+  # It is skip-existing by default, so it can safely resume across jobs.
+  # Same resolution rule as the model paths above: absolute path -> used as-is,
+  # relative path -> resolved against the repo root. Just edit these two lines.
+  train_jsonl: /path/to/cluster/data/<dataset>_seg_map_grounded_sam/train.jsonl   # REPLACE
+  val_jsonl:   /path/to/cluster/data/<dataset>_seg_map_grounded_sam/val.jsonl     # REPLACE
+
+# =============================================================================
+# 3. GLOBAL FALLBACK PROMPT
+# =============================================================================
+prompt: null    # null -> each image uses its own prompt field from the JSONL
+                # Make sure those are real per-image captions, not a repeated
+                # template -- a vague prompt lets the base model's prior
+                # dominate the structure signal.
+
+# =============================================================================
+# 4. OPERATIONAL SETTINGS
+# =============================================================================
+seed: 42
+
+# ── VALIDATION COST -- this is the biggest hidden drain on a 10h wall ───────
+# Each validation runs FULL diffusion sampling, not just a loss pass. Cost per
+# validation = val_batches x val_batch_size x val_num_inference_steps UNet
+# passes (doubled again when CFG is active). The code default is 50 inference
+# steps (grounded_sam_training.py: cfg.get("val_num_inference_steps", 50)),
+# which with val_batches=4 x val_batch_size=2 = 8 images = 400 sampling steps
+# EVERY 500 training steps, 40 times over a 20,000-step run.
+# Pinned lower here deliberately: 2 batches x 2 images x 25 steps = 100
+# sampling steps per validation, ~4x cheaper, still enough to eyeball whether
+# the output is starting to follow the segmentation map.
+# Raise these only once you have measured what a validation actually costs.
+val_batches: 2
+val_num_inference_steps: 25
+n_grid_images: 10                # number of validation images per checkpoint (5 fixed + 5 fresh)
+
+log_c: true     # log the conditioning map alongside each validation image
+                # Validation grids -> <output_dir>/val_grids/step<N>.png
+
+# =============================================================================
+# 5. PRECISION
+# =============================================================================
+# bf16 is always on -- hardcoded as mixed_precision="bf16" on the Accelerator
+# in grounded_sam_training.py, not a config knob.
+ignore_check: true                 # silences the checkpoint-key completeness assert in add_lora_from_config
+tag: grounded_sam_cluster          # CLUSTER: outputs/train/grounded_sam_cluster/...
+
+# =============================================================================
+# 6. MODEL OVERRIDES
+# =============================================================================
+model:
+  _target_: src.model.SDXL
+  pipeline_type: diffusers.StableDiffusionXLPipeline
+  model_name: ${base_model_name}   # grounded_sam_training.py overrides to base_model_path when local
+  local_files_only: ${local_files_only}
+  guidance_scale: 7.5
+  vae_path: madebyollin/sdxl-vae-fp16-fix   # overridden to vae_local_path when local
+
+# =============================================================================
+# 7. LORA ARCHITECTURE
+# =============================================================================
+lora:
+  struct:
+    optimize: true
+    # CLUSTER: consider flipping to `true` for a real run. It forces the model
+    # to sometimes train with zero structure signal (src/model.py gates
+    # self.c_dropout's random structure-masking on this) -- the standard
+    # ControlNet/T2I-Adapter technique for making conditioning genuinely
+    # load-bearing instead of easy to ignore. Left false here because it
+    # changes training dynamics and has never been run in this repo: make it
+    # a deliberate experiment, not a silent default.
+    cfg: false
+    ckpt_path: null                # RESUME after a 10h timeout: point at the last
+                                   # checkpoint dir, e.g.
+                                   # "outputs/train/grounded_sam_cluster/runs/.../checkpoint-4500"
+                                   # (weights reload; optimizer state does not -- see CHECKPOINTING)
+    encoder:                       # identity slot filler -- skip_encode=True means
+      _target_: torch.nn.Identity  # no encoder is ever called at train time
+    config:
+      adaption_mode: only_res_conv
+      rank: 128
+      c_dim: 128
+      lora_cls: NewStructLoRAConv
+      lora_scale: 1
+
+# LAUNCH (matches the sbatch header at the top of this file):
+#   srun accelerate launch \
+#     --multi_gpu --num_processes=4 --num_machines=1 --mixed_precision=bf16 \
+#     grounded_sam_training.py experiment=train_grounded_sam_cluster
+#
+#   Single-GPU debug on a login/interactive node:
+#     python grounded_sam_training.py experiment=train_grounded_sam_cluster data.batch_size=2

@@ -1,0 +1,10 @@
+defaults:
+  - _self_
+
+_target_: src.encoders.grounded_sam_encoder.GroundedSamEncoder
+dino_model: IDEA-Research/grounding-dino-tiny
+sam_model: facebook/sam-vit-base
+box_threshold: 0.15
+text_threshold: 0.15
+size: ${size}
+local_files_only: ${local_files_only}

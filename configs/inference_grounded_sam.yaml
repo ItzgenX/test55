@@ -1,0 +1,73 @@
+# Root config for grounded_sam_inference.py (@hydra.main(config_name="inference_grounded_sam")).
+# Mirrors the segformer branch's configs/inference_seg.yaml exactly, except
+# the encoder is GroundedSamEncoder (two HF models: Grounding DINO + SAM)
+# instead of SegFormer's single dense classifier -- see dino_model_path/
+# sam_model_path below and src/encoders/grounded_sam_encoder.py.
+#
+# checkpoints/local_models/ is gitignored -- the *_path values below are
+# RELATIVE (repo-portable: breaks if hardcoded absolute and the repo is
+# copied/cloned elsewhere). Shared storage across worktrees without
+# duplicating ~15GB is handled at the filesystem level instead -- a junction/
+# symlink named `checkpoints` inside this worktree pointing at the real
+# shared folder -- not by baking an absolute path into config.
+#
+# Usage:
+#   python grounded_sam_inference.py ckpt_path=<checkpoint dir> inference.json_file=data/dataset/extracted_seg_map_grounded_sam/val.jsonl
+
+defaults:
+  - /model: sdxl
+  - /lora@lora.struct: struct
+  - override /lora/encoder@lora.struct.encoder: grounded_sam  # real encoder needed here, for the mIoU controllability check
+  - override /lora/mapper_network@lora.struct.mapper_network: segidXL  # class-ID embedding conditioning -- must match training (grounded_sam_inference.py feeds cs=[cond_ids], raw Long class-id tensors, skip_encode=True; see _load_seg_ids below)
+  - _self_
+
+device: null  # null -> auto-detect a GPU via resolve_device(); "cpu" to opt in explicitly
+size: [1280, 800]  # (width, height)
+resize_mode: aspect
+seed: 42
+local_files_only: false
+
+# Only read/used when local_files_only=true (offline, from local checkpoint folders).
+# Relative paths -- see worktree note above.
+base_model_path: checkpoints/local_models/stable-diffusion-xl-base-1.0
+base_model_name: stabilityai/stable-diffusion-xl-base-1.0
+dino_model_path: checkpoints/local_models/grounding-dino-tiny
+dino_model_name: IDEA-Research/grounding-dino-tiny
+sam_model_path: checkpoints/local_models/sam-vit-base
+sam_model_name: facebook/sam-vit-base
+vae_local_path: checkpoints/local_models/sdxl-vae-fp16-fix
+
+ckpt_path: ???
+
+model:
+  vae_path: madebyollin/sdxl-vae-fp16-fix
+
+lora:
+  struct:
+    cfg: false
+    config:
+      c_dim: 128
+      rank: 128
+      adaption_mode: only_res_conv
+
+inference:
+  output_dir: outputs/inference/grounded_sam
+  json_file: null
+  seg_maps: []
+  images: []
+  prompts: []
+  n_samples: 1
+  num_inference_steps: 50
+  guidance_scale: 7.5
+  negative_prompt: null
+  conditioning_kernel_size: 0
+  lora_scale_start: 1.0
+  lora_scale_end: 1.0
+  lora_scale_decay_start_frac: 0.3
+  save_generated_only: false
+
+hydra:
+  run:
+    dir: outputs/inference_grounded_sam/runs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  job:
+    chdir: true

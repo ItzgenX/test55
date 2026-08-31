@@ -1,0 +1,20 @@
+defaults:
+  - _self_
+
+# Identical _target_ to the segformer branch's segformer_jsonl.yaml -- the
+# raw-ID-PNG + JSONL convention (src/data/local_seg.py) doesn't know or care
+# which encoder produced the maps, only that they're 0..num_classes-1 PNGs.
+_target_: src.data.local_seg.SegJsonDataModule
+train_jsonl: ???
+val_jsonl: ???
+size: ${size}
+resize_mode: ${resize_mode}
+batch_size: 4
+val_batch_size: 1
+workers: 4
+val_workers: 1
+# classid (default, and the only mode this branch's configs actually use):
+# raw class-id Long map for SegIDStructureMapperXL's embedding stem. rgb:
+# legacy palette-colorized map path, kept for the class -- no shipped
+# grounded_sam config selects it. Must match configs/lora/mapper_network/segidXL.yaml.
+conditioning: classid
