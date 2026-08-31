@@ -1,0 +1,62 @@
+# Root config for segformer_inference.py (@hydra.main(config_name="inference_seg")).
+# Unlike train.py/sample.py, this is not an experiment-override skeleton --
+# it's the full config on its own, since segformer_inference.py reads several
+# top-level keys directly (base_model_path, seg_model_path, ...).
+#
+# Usage:
+#   python segformer_inference.py ckpt_path=<checkpoint dir> inference.json_file=data/seg_training_aspect/test.jsonl
+
+defaults:
+  - /model: sdxl
+  - /lora@lora.struct: struct
+  - override /lora/encoder@lora.struct.encoder: segformer  # real encoder needed here, for the mIoU controllability check
+  - override /lora/mapper_network@lora.struct.mapper_network: fsmXL
+  - _self_
+
+device: null  # null -> auto-detect a GPU via resolve_device(); "cpu" to opt in explicitly
+size: [1280, 800]  # (width, height)
+resize_mode: aspect
+seed: 42
+local_files_only: false
+
+# Only read/used when local_files_only=true (offline, from local checkpoint folders).
+base_model_path: checkpoints/local_models/stable-diffusion-xl-base-1.0
+base_model_name: stabilityai/stable-diffusion-xl-base-1.0
+seg_model_path: checkpoints/local_models/segformer-b5-cityscapes
+seg_model_name: nvidia/segformer-b5-finetuned-cityscapes-1024-1024
+vae_local_path: checkpoints/local_models/sdxl-vae-fp16-fix
+
+ckpt_path: ???
+
+model:
+  vae_path: madebyollin/sdxl-vae-fp16-fix
+
+lora:
+  struct:
+    cfg: false
+    config:
+      c_dim: 128
+      rank: 128
+      adaption_mode: only_res_conv
+
+inference:
+  output_dir: outputs/inference/seg
+  json_file: null
+  seg_maps: []
+  images: []
+  prompts: []
+  n_samples: 1
+  num_inference_steps: 50
+  guidance_scale: 7.5
+  negative_prompt: null
+  conditioning_kernel_size: 0
+  lora_scale_start: 1.0
+  lora_scale_end: 1.0
+  lora_scale_decay_start_frac: 0.3
+  save_generated_only: false
+
+hydra:
+  run:
+    dir: outputs/inference_seg/runs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  job:
+    chdir: true

@@ -1,0 +1,241 @@
+# @package _global_
+#
+# configs/experiment/train_seg_cluster.yaml
+# -----------------------------------------
+# Cluster variant of train_seg.yaml. Same architecture, same 19-class
+# SegFormer pipeline -- only the HARDWARE-shaped values differ, sized for
+# the real sbatch allocation:
+#
+#   #SBATCH --nodes=1
+#   #SBATCH --ntasks-per-node=4       -> accelerate --num_processes=4
+#   #SBATCH --cpus-per-task=12        -> dataloader workers budget per process
+#   #SBATCH --gres=gpu:4              -> 4 GPUs, one per task
+#   #SBATCH --time=10:00:00           -> HARD 10h wall clock (see CHECKPOINTING)
+#
+# NOT benchmarked on that hardware -- the only measured numbers in this repo
+# come from a single 12GB dev GPU. Treat every value below as a documented
+# starting point to verify in the first ~200 steps, not a tuned result.
+#
+# Differences from train_seg.yaml are flagged inline with "CLUSTER:".
+
+defaults:
+  - /lora@lora.struct: struct
+  - override /lora/encoder@lora.struct.encoder: identity           # unused at train time: skip_encode=True bypasses it
+  - override /lora/mapper_network@lora.struct.mapper_network: fsmXL  # SDXL has 3 UNet stages, not 4
+  - override /model: sdxl
+  - override /data: segformer_jsonl
+  - _self_
+
+# =============================================================================
+# MODEL LOADING — LOCAL vs INTERNET  (one switch: local_files_only)
+# =============================================================================
+local_files_only: true
+
+# CLUSTER: paths must point at the cluster filesystem, NOT this dev box's D:/.
+# Copy checkpoints/local_models/ across and set these before the first run.
+base_model_name:  stabilityai/stable-diffusion-xl-base-1.0
+base_model_path:  /path/to/cluster/checkpoints/local_models/stable-diffusion-xl-base-1.0    # REPLACE
+
+# LOCKED: b5, not b0 -- measured mIoU 0.76/0.66 train/val on real Cityscapes
+# ground truth in this repo (check_seg_accuracy.py). Not loaded at train time
+# (skip_encode=True); needed by seg_map_calculations.py and inference.
+seg_model_name: nvidia/segformer-b5-finetuned-cityscapes-1024-1024
+seg_model_path: /path/to/cluster/checkpoints/local_models/segformer-b5-cityscapes           # REPLACE
+
+vae_local_path: /path/to/cluster/checkpoints/local_models/sdxl-vae-fp16-fix                 # REPLACE
+
+# =============================================================================
+# HARDWARE — sized for 4x GPU, 12 CPU cores per task.
+# =============================================================================
+# CLUSTER: OFF. This is a pure recompute-vs-store speed/VRAM tradeoff --
+# training results are mathematically IDENTICAL either way. It was ON for the
+# 12GB dev box out of necessity; with large-VRAM GPUs the memory it saves is
+# irrelevant and turning it off buys free step-time. SDXL's UNet is FROZEN --
+# only the ~20M LoRA + ~1.2M mapper params carry gradients/optimizer state --
+# so activations dominate, and there is plenty of headroom.
+gradient_checkpointing: false
+
+# CLUSTER: effective batch = batch_size(8) x accum(1) x GPUs(4) = 32
+# (was 4 on the dev box). Raise batch_size if nvidia-smi shows headroom in
+# the first few hundred steps; that is the cheapest throughput win here.
+gradient_accumulation_steps: 1
+
+size: [1280, 800]                       # unchanged -- native dataset resolution, divisible by 32
+                                        # for SDXL (VAE/8 x 2 UNet halvings/4). Guarded by a
+                                        # ValueError in segformer_training.py.
+resize_mode: aspect
+
+# =============================================================================
+# 1. GENERAL TRAINING PARAMETERS
+# =============================================================================
+# ── DATASET MATH (real custom dataset: 41,679 train / 1,000 val) ────────────
+#   effective batch = batch_size(8) x accum(1) x GPUs(4) = 32
+#   steps / epoch    = ceil(41,679 / 32) = 1,303 optimizer steps
+#   max_train_steps  = 20,000  ->  ~15.4 epochs (this is the binding limit;
+#                                  `epochs: 20` = 26,060 steps, never reached)
+#   ckpt_steps 500   ->  ~2.6 checkpoint saves per epoch
+#
+# CLUSTER: LR scaled for the 8x larger effective batch (4 -> 32). sqrt-scaling
+# gives 1e-4 x sqrt(8) ~= 2.8e-4; linear gives 8e-4. 2e-4 sits deliberately on
+# the conservative side of sqrt -- watch the loss trace over the first ~200
+# steps and back off toward 1e-4 if it spikes or NaNs, or push toward 3e-4 if
+# it is flat and stable. This is a starting point, not a tuned value.
+learning_rate: 2e-4
+lr_scheduler: constant
+epochs: 20
+
+# CLUSTER: max_train_steps is the real budget; epochs above just has to be
+# large enough not to end the run first. A 150-step run on this dataset landed
+# at mIoU~=0.09 (near-random) -- conditioning networks of this type generally
+# need thousands to tens of thousands of steps. 20,000 (~15 epochs of the real
+# dataset) is an order-of-magnitude target to monitor mIoU against and extend
+# if still improving, NOT a convergence guarantee. Whether it FITS the 10h wall
+# depends entirely on measured s/step on your GPUs: 20,000 steps in 10h
+# requires ~1.8 s/step sustained. Measure the first ~50 steps; if slower,
+# expect to resume across multiple jobs.
+max_train_steps: 20000
+
+# =============================================================================
+# CHECKPOINTING under a 10h wall clock  (READ THIS BEFORE THE FIRST RUN)
+# =============================================================================
+# --time=10:00:00 is a HARD kill. Two verified facts about resume in this repo:
+#   1. save_checkpoint (src/utils.py) writes ONLY lora + mapper weights --
+#      no optimizer state, no global_step, no scheduler state.
+#   2. segformer_training.py sets global_step = 0 unconditionally on start.
+# Consequences: resuming via lora.struct.ckpt_path reloads the trained weights
+# correctly, but AdamW momentum/variance is lost and the step counter restarts.
+# Because lr_scheduler is `constant`, NO learning-rate schedule is lost -- that
+# part is harmless. The optimizer-state reset costs a short re-warm each resume.
+#
+# So: checkpoint often enough that a wall-clock kill is cheap. 500 steps is a
+# starting guess -- MEASURE s/step over the first ~50 steps, then set
+# ckpt_steps so a checkpoint lands roughly every 30-45 min.
+val_steps:  500
+ckpt_steps: 500
+
+# =============================================================================
+# 2. DATA  (19-class Cityscapes-trainId vocabulary)
+# =============================================================================
+# The class vocabulary lives in code: SEG_CITYSCAPES_PALETTE in
+# src/encoders/seg_encoder.py (19 classes, tied to SegFormer-b5's pretrained
+# head), read at load time by src/data/local_seg.py.
+data:
+  # CLUSTER: 12 CPU cores per task -- 8 train + 2 val workers leaves headroom
+  # for the main process and the CUDA/NCCL threads. Do not set workers=12.
+  batch_size:     8
+  val_batch_size: 2
+  workers:        8
+  val_workers:    2
+  # CLUSTER: cluster filesystem paths, and the FULL dataset (41,679 train /
+  # 1,000 val).
+  #
+  # PREREQUISITE -- budget time for this. Training reads PRECOMPUTED maps;
+  # seg_map_calculations.py must run over all 41,679 images first. This is
+  # much cheaper than the grounded_sam branch's precompute (one SegFormer-b5
+  # forward pass per image, vs Grounding-DINO + SAM), but at 41,679 images it
+  # is still a real job -- time a small batch first and size it from that.
+  # Skip-existing is on by default, so it can resume across jobs.
+  train_jsonl: /path/to/cluster/data/seg_training_aspect/train.jsonl   # REPLACE
+  val_jsonl:   /path/to/cluster/data/seg_training_aspect/val.jsonl     # REPLACE
+
+# =============================================================================
+# 3. GLOBAL FALLBACK PROMPT
+# =============================================================================
+prompt: null    # null -> each image uses its own prompt field from the JSONL
+                # NOTE: the current stand-in manifests use ONE repeated generic
+                # template ("a photo of a city street in X"). Regenerate with
+                # real per-image captions before spending a 10h allocation --
+                # a vague prompt lets the base model's prior dominate structure.
+
+# =============================================================================
+# 4. OPERATIONAL SETTINGS
+# =============================================================================
+seed: 42
+
+# ── VALIDATION / MONITORING COST -- the biggest hidden drain on a 10h wall ──
+# Two SEPARATE things run on two SEPARATE cadences (val_steps for the cheap
+# one, ckpt_steps for the heavy one -- see the CHECKPOINTING section above):
+#
+#   val/loss (every val_steps)   -- a LOSS PASS ONLY, no diffusion sampling.
+#     Cost = val_batches x val_batch_size forward passes. Cheap by
+#     construction now -- val_batches only controls this.
+#
+#   monitoring images (every ckpt_steps) -- n_grid_images (train.yaml, base
+#     default 10) real generations, each val_num_inference_steps sampling
+#     steps (doubled if grid_include_empty_prompt is on). Cost per checkpoint
+#     = n_grid_images x val_num_inference_steps UNet passes, all on the MAIN
+#     PROCESS ONLY (see ddp_timeout_seconds above) -- ~250 sampling steps per
+#     checkpoint at the base defaults, ~40 times over a 20,000-step run.
+#
+# val_miou (below) adds one extra segmenter forward pass per FIXED scene per
+# checkpoint on top of that -- a classifier pass, not diffusion sampling, so
+# negligible next to the generation cost above.
+#
+# n_grid_images/val_num_inference_steps are NOT overridden here -- unmeasured
+# on real cluster hardware, same discipline as the rest of this file: measure
+# the first checkpoint's actual wall-clock, then override here if it's eating
+# too much of the 10h budget (fewer scenes or fewer steps, not both blind).
+val_batches: 2
+
+# CLUSTER: on. The controllability metric (does the generation actually follow
+# the segmentation map?) is what every real result in this project is judged
+# by -- worth the extra segmenter load on the main process. See train.yaml's
+# own val_miou comment for why it defaults to OFF on the dev config (a 12GB
+# box has no VRAM headroom left for a second model).
+val_miou: true
+
+# =============================================================================
+# 5. PRECISION
+# =============================================================================
+# bf16 is always on -- hardcoded as mixed_precision="bf16" on the Accelerator
+# in segformer_training.py, not a config knob.
+ignore_check: true                 # silences the checkpoint-key completeness assert in add_lora_from_config
+tag: seg_cluster                   # CLUSTER: outputs/train/seg_cluster/...
+
+# =============================================================================
+# 6. MODEL OVERRIDES
+# =============================================================================
+model:
+  _target_: src.model.SDXL
+  pipeline_type: diffusers.StableDiffusionXLPipeline
+  model_name: ${base_model_name}   # segformer_training.py overrides to base_model_path when local
+  local_files_only: ${local_files_only}
+  guidance_scale: 7.5
+  vae_path: madebyollin/sdxl-vae-fp16-fix   # overridden to vae_local_path when local
+
+# =============================================================================
+# 7. LORA ARCHITECTURE
+# =============================================================================
+lora:
+  struct:
+    optimize: true
+    # CORRECTED (an earlier comment here claimed the opposite): this flag does
+    # NOT gate structure dropout during training. segformer_training.py passes
+    # cfg_mask=[True, ...] into model.forward_easy regardless, so src/model.py's
+    # c_dropout structure-masking (5%) is ALWAYS active while training -- the
+    # ControlNet/T2I-Adapter technique for making conditioning load-bearing is
+    # already on. What this flag actually controls is the SAMPLING path
+    # (src/model.py SDXL.sample): true = the structure branch gets a real
+    # zeros/real CFG pair, false = the same map is used for both halves.
+    # Verified by reading both call sites, not assumed.
+    cfg: false
+    ckpt_path: null                # RESUME after a 10h timeout: point at the last
+                                   # checkpoint dir, e.g.
+                                   # "outputs/train/seg_cluster/runs/.../checkpoint-4500"
+                                   # (weights reload; optimizer state does not -- see CHECKPOINTING)
+    encoder:                       # identity slot filler -- skip_encode=True means
+      _target_: torch.nn.Identity  # no encoder is ever called at train time
+    config:
+      adaption_mode: only_res_conv
+      rank: 128
+      c_dim: 128
+      lora_cls: NewStructLoRAConv
+      lora_scale: 1
+
+# LAUNCH (matches the sbatch header at the top of this file):
+#   srun accelerate launch \
+#     --multi_gpu --num_processes=4 --num_machines=1 --mixed_precision=bf16 \
+#     segformer_training.py experiment=train_seg_cluster
+#
+#   Single-GPU debug on a login/interactive node:
+#     python segformer_training.py experiment=train_seg_cluster data.batch_size=2

@@ -1,0 +1,7 @@
+defaults:
+  - _self_
+
+_target_: src.encoders.seg_encoder.SegmentationEncoder
+model: nvidia/segformer-b5-finetuned-cityscapes-1024-1024
+size: ${size}
+local_files_only: ${local_files_only}

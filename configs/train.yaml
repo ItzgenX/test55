@@ -1,0 +1,76 @@
+defaults:
+  - data: ???
+  - model: ???
+  - _self_
+  - experiment: null
+
+size: ???
+max_train_steps: null
+epochs: 20
+learning_rate: 1e-4
+
+lr_warmup_steps: 0
+lr_scheduler: constant
+
+prompt: null
+gradient_accumulation_steps: 1
+
+# val_steps  = how often to compute val/loss (cheap; also updates best_model/)
+# ckpt_steps = how often to write weights + monitoring images (heavy)
+# Independent on purpose -- validate often, save on a slower cadence.
+ckpt_steps: 1000
+val_steps: 1000
+val_images: 4
+seed: 42
+n_samples: 4
+
+# ── Per-checkpoint monitoring images ─────────────────────────────────────────
+# n_grid_images validation scenes per checkpoint, split 50/50 fixed/fresh:
+# the fixed half is drawn once per run and reused at every checkpoint (watch
+# the SAME scenes improve; metrics use these only), the fresh half is redrawn
+# each time (generalization peek). Source is the validation set, never train.
+n_grid_images: 10
+# Adds a 4th "RAW SEG GEN" panel generated with an EMPTY prompt -- structure
+# adherence with no text to lean on. Doubles generation cost, hence off.
+grid_include_empty_prompt: false
+# Diffusion steps per monitoring image. Cost per checkpoint is roughly
+# n_grid_images x this (x2 when grid_include_empty_prompt is on).
+val_num_inference_steps: 25
+# Batches used for val/loss (cheap -- a loss pass, no sampling).
+val_batches: 4
+
+# ── val/miou_fixed: the controllability metric ───────────────────────────────
+# Measuring "did the generation follow the map?" means segmenting the GENERATED
+# image, which needs a live segmenter in VRAM. Training itself loads none
+# (skip_encode reads precomputed maps; the encoder slot is torch.nn.Identity),
+# so this flag opts into loading ONE, on the main process only.
+# false by default: a 12GB dev box already runs near its ceiling at 1280x800,
+# and this metric only says anything meaningful on real cluster-scale runs.
+# Turn it on in the cluster config. Fails CLOSED -- if the segmenter cannot be
+# built, mIoU is skipped and everything else still runs.
+val_miou: false
+
+# Mirror the key training numbers into the run's own log file every N steps,
+# so a run can be read back without opening TensorBoard.
+log_every_steps: 50
+
+# Stop after this many epochs with no new best val/loss. 0 = disabled.
+early_stop_patience: 0
+
+# NCCL collective timeout. Rank 0 generates every monitoring image while the
+# other ranks sit blocked in the next all-reduce; with enough scenes/steps that
+# stall can exceed NCCL's 30-minute default and kill a healthy multi-GPU job.
+ddp_timeout_seconds: 5400
+
+tag: ''
+
+local_files_only: false
+
+hydra:
+  run:
+    dir: outputs/train/${tag}/runs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: outputs/train/${tag}/multiruns/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+  job:
+    chdir: true

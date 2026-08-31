@@ -1,0 +1,1249 @@
+<title>The Conditional LoRA Field Guide</title>
+<style>
+  /* ============================== TOKENS ============================== */
+  :root {
+    --paper: #f2f4f7;
+    --ink: #161b22;
+    --ink-soft: #454e5c;
+    --panel: #e4e9f0;
+    --panel-code: #dde3ec;
+    --rule: #c7d0dc;
+    --accent: #b4671f;       /* copper — the "conditional" idea, the one thing this repo adds */
+    --accent-ink: #7a4413;
+    --code-accent: #245e73;  /* teal — "grounded in this repo's code" */
+    --code-accent-soft: #e4eef1;
+    --shadow: 0 1px 2px rgba(22,27,34,0.06), 0 8px 24px -16px rgba(22,27,34,0.18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #10151c;
+      --ink: #e7ecf2;
+      --ink-soft: #a9b4c2;
+      --panel: #1b2330;
+      --panel-code: #171f2b;
+      --rule: #2c3a4c;
+      --accent: #e08a44;
+      --accent-ink: #f3c793;
+      --code-accent: #6fb8d6;
+      --code-accent-soft: #16262c;
+      --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 8px 24px -16px rgba(0,0,0,0.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #10151c;
+    --ink: #e7ecf2;
+    --ink-soft: #a9b4c2;
+    --panel: #1b2330;
+    --panel-code: #171f2b;
+    --rule: #2c3a4c;
+    --accent: #e08a44;
+    --accent-ink: #f3c793;
+    --code-accent: #6fb8d6;
+    --code-accent-soft: #16262c;
+    --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 8px 24px -16px rgba(0,0,0,0.6);
+  }
+
+  --font-display: Rockwell, "Roboto Slab", "Zilla Slab", Georgia, "Times New Roman", serif;
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.65;
+    overflow-x: hidden;
+  }
+  ::selection { background: var(--accent); color: #fff; }
+  a { color: var(--code-accent); }
+  a:focus-visible, button:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    text-wrap: balance;
+    line-height: 1.15;
+    color: var(--ink);
+  }
+
+  code, pre, .mono {
+    font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, "Roboto Mono", monospace;
+  }
+
+  /* ============================== SHELL ============================== */
+  .shell {
+    display: grid;
+    grid-template-columns: 250px minmax(0, 1fr);
+    gap: 0;
+    max-width: 1180px;
+    margin: 0 auto;
+  }
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: 1fr; }
+  }
+
+  /* ---- nav rail ---- */
+  nav.rail {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 28px 18px 28px 24px;
+    border-right: 1px solid var(--rule);
+    font-size: 0.86rem;
+  }
+  @media (max-width: 900px) {
+    nav.rail {
+      position: static;
+      height: auto;
+      border-right: none;
+      border-bottom: 1px solid var(--rule);
+      padding: 16px 20px;
+    }
+    nav.rail ol { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+    nav.rail .rail-title { display: none; }
+  }
+  .rail-title {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.72rem;
+    color: var(--ink-soft);
+    margin: 0 0 12px;
+  }
+  nav.rail ol {
+    list-style: none;
+    margin: 0; padding: 0;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  nav.rail li.group-head {
+    margin-top: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-size: 0.68rem;
+    color: var(--ink-soft);
+    padding: 0 8px;
+  }
+  nav.rail li.group-head:first-child { margin-top: 0; }
+  nav.rail a {
+    display: block;
+    padding: 5px 8px;
+    border-radius: 4px;
+    text-decoration: none;
+    color: var(--ink-soft);
+  }
+  nav.rail a:hover { background: var(--panel); color: var(--ink); }
+  nav.rail .rail-foot {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--rule);
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+  }
+
+  /* ---- main content ---- */
+  main { padding: 0 28px 90px; min-width: 0; }
+  @media (max-width: 640px) { main { padding: 0 16px 70px; } }
+
+  .prose { max-width: 66ch; }
+
+  header.hero {
+    padding: 46px 0 30px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 34px;
+  }
+  .eyebrow {
+    display: inline-block;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    font-size: 0.74rem;
+    color: var(--code-accent);
+    background: var(--code-accent-soft);
+    padding: 3px 9px;
+    border-radius: 3px;
+    margin-bottom: 14px;
+  }
+  h1.title { font-size: clamp(1.9rem, 4vw, 2.7rem); margin: 0 0 12px; }
+  .dek { max-width: 62ch; color: var(--ink-soft); font-size: 1.05rem; margin: 0 0 18px; }
+  .hero-meta {
+    display: flex; flex-wrap: wrap; gap: 10px 22px;
+    font-size: 0.84rem; color: var(--ink-soft);
+    padding-top: 14px; border-top: 1px dashed var(--rule);
+  }
+  .hero-meta b { color: var(--ink); font-weight: 600; }
+
+  section.lesson {
+    padding: 46px 0;
+    border-bottom: 1px solid var(--rule);
+    scroll-margin-top: 18px;
+  }
+  section.lesson:last-of-type { border-bottom: none; }
+
+  .lesson-kicker {
+    display: flex; align-items: baseline; gap: 12px;
+    margin-bottom: 6px;
+  }
+  .lesson-num {
+    font-family: var(--font-display);
+    font-size: 1.05rem;
+    color: var(--code-accent);
+    font-weight: 700;
+  }
+  .lesson-kicker .tag {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--ink-soft);
+  }
+  h2.lesson-title { font-size: clamp(1.3rem, 2.6vw, 1.65rem); margin: 0 0 18px; }
+
+  .panel {
+    border-radius: 6px;
+    padding: 18px 20px;
+    margin: 20px 0;
+  }
+  .panel-eyebrow {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.72rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .panel-eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+
+  .panel.concept {
+    background: transparent;
+    border-left: 3px solid var(--accent);
+    padding-left: 18px;
+    max-width: 66ch;
+  }
+  .panel.concept .panel-eyebrow { color: var(--accent-ink); }
+  .panel.concept .panel-eyebrow .dot { background: var(--accent); }
+
+  .panel.repo {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    box-shadow: var(--shadow);
+    max-width: 74ch;
+  }
+  .panel.repo .panel-eyebrow { color: var(--code-accent); }
+  .panel.repo .panel-eyebrow .dot { background: var(--code-accent); }
+  .panel.repo p { margin: 0 0 10px; }
+  .panel.repo p:last-child { margin-bottom: 0; }
+  .panel.repo pre {
+    background: var(--panel-code);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 12px 14px;
+    overflow-x: auto;
+    font-size: 0.84rem;
+    line-height: 1.55;
+    margin: 10px 0;
+  }
+  .panel.repo code.inline {
+    background: var(--panel-code);
+    border-radius: 3px;
+    padding: 0.1em 0.35em;
+    font-size: 0.9em;
+  }
+  .fileref {
+    font-size: 0.82rem;
+    color: var(--code-accent);
+  }
+
+  figure.diagram {
+    margin: 26px 0;
+    max-width: 100%;
+  }
+  figure.diagram .frame {
+    overflow-x: auto;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 14px 10px;
+  }
+  figure.diagram svg { width: 100%; height: auto; display: block; min-width: 520px; }
+  figure.diagram figcaption {
+    font-size: 0.86rem;
+    color: var(--ink-soft);
+    margin-top: 10px;
+    max-width: 68ch;
+  }
+  svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; }
+  svg .lbl { font-size: 12px; fill: currentColor; }
+  svg .lbl-sm { font-size: 10.5px; fill: currentColor; opacity: 0.78; }
+  svg .lbl-strong { font-size: 12px; font-weight: 700; fill: currentColor; }
+  svg .box { fill: var(--paper); stroke: currentColor; stroke-width: 1.4; opacity: 0.9; }
+  svg .box-accent { fill: var(--paper); stroke: var(--accent); stroke-width: 1.8; }
+  svg .box-code { fill: var(--paper); stroke: var(--code-accent); stroke-width: 1.6; }
+  svg .flow { stroke: currentColor; stroke-width: 1.4; fill: none; opacity: 0.75; }
+  svg .flow-accent { stroke: var(--accent); stroke-width: 1.8; fill: none; }
+  svg .flow-dash { stroke: currentColor; stroke-width: 1.1; fill: none; opacity: 0.55; stroke-dasharray: 4 3; }
+
+  ul.tight { margin: 8px 0; padding-left: 20px; }
+  ul.tight li { margin: 4px 0; }
+
+  table.glossary {
+    width: 100%; border-collapse: collapse; margin: 10px 0 30px;
+    font-size: 0.92rem;
+  }
+  table.glossary th, table.glossary td {
+    text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  table.glossary th {
+    text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.72rem; color: var(--ink-soft);
+  }
+  table.glossary td.term { font-family: var(--font-display); font-weight: 700; white-space: nowrap; }
+  table.glossary td.where { color: var(--code-accent); font-size: 0.88em; }
+
+  .studylist { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .studylist li {
+    border: 1px solid var(--rule); border-radius: 6px; padding: 12px 16px; background: var(--panel);
+  }
+  .studylist .st-title { font-weight: 700; }
+  .studylist .st-why { color: var(--ink-soft); font-size: 0.9rem; margin-top: 3px; }
+
+  .honest {
+    border: 1px dashed var(--rule);
+    border-radius: 6px;
+    padding: 14px 16px;
+    font-size: 0.92rem;
+    color: var(--ink-soft);
+    margin: 18px 0;
+  }
+  .honest b { color: var(--ink); }
+
+  footer.end {
+    padding: 30px 0 60px;
+    color: var(--ink-soft);
+    font-size: 0.85rem;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+  }
+</style>
+
+<div class="shell">
+  <nav class="rail" aria-label="Lesson index">
+    <p class="rail-title">Field guide</p>
+    <ol>
+      <li><a href="#start">Start here</a></li>
+      <li class="group-head">Foundations</li>
+      <li><a href="#l1">1 · Numbers in, numbers out</a></li>
+      <li><a href="#l2">2 · What "latent space" is</a></li>
+      <li><a href="#l3">3 · Diffusion: destroy, then reverse</a></li>
+      <li><a href="#l4">4 · The UNet's shape</a></li>
+      <li><a href="#l5">5 · How the prompt gets in</a></li>
+      <li class="group-head">The paper's idea</li>
+      <li><a href="#l6">6 · Plain LoRA</a></li>
+      <li><a href="#l7">7 · Making it conditional (FiLM)</a></li>
+      <li><a href="#l8">8 · One config knob, three variants</a></li>
+      <li class="group-head">Depth, in depth</li>
+      <li><a href="#l9">9 · The depth encoder, start to finish</a></li>
+      <li><a href="#l10">10 · The trick: no depth dataset needed</a></li>
+      <li><a href="#l11">11 · One map, four resolutions</a></li>
+      <li><a href="#l12">12 · The DataProvider mailbox</a></li>
+      <li><a href="#l13">13 · Swapping the encoder</a></li>
+      <li class="group-head">Running the repo</li>
+      <li><a href="#l14">14 · Hydra: yaml into Python objects</a></li>
+      <li><a href="#l15">15 · Code flow: training</a></li>
+      <li><a href="#l16">16 · Code flow: sampling</a></li>
+      <li><a href="#l17">17 · Why conditioning gets dropped</a></li>
+      <li><a href="#l18">18 · Also in this repo: SDXL, B-LoRA</a></li>
+      <li class="group-head">Extending to segmentation</li>
+      <li><a href="#l19">19 · Why SDXL, not SD1.5</a></li>
+      <li><a href="#l20">20 · Precomputed maps: skip_encode for real</a></li>
+      <li><a href="#l21">21 · The segmentation encoder</a></li>
+      <li><a href="#l22">22 · A real bug, found and fixed</a></li>
+      <li><a href="#l23">23 · Two new sampling knobs</a></li>
+      <li><a href="#l24">24 · Checked against ground truth</a></li>
+      <li><a href="#l25">25 · Five more bugs, found by actually running it</a></li>
+      <li><a href="#l26">26 · A full-dataset proof run: honest results</a></li>
+      <li><a href="#l27">27 · The controllability check didn't lie</a></li>
+      <li><a href="#glossary">Glossary</a></li>
+      <li><a href="#study">Further study</a></li>
+    </ol>
+    <p class="rail-foot">Grounded in <span class="mono">CompVis/LoRAdapter</span> as it sits on disk in this workspace, plus this session's own segmentation extension (branch <span class="mono">segformer</span>). Every "in this repo" panel quotes a real file read this session — no other branch, fork, or prior session assumed.</p>
+  </nav>
+
+  <main>
+    <header class="hero" id="start">
+      <span class="eyebrow">Study guide · read top to bottom · no gen-AI background assumed</span>
+      <h1 class="title">The Conditional LoRA Field Guide</h1>
+      <p class="dek">This repo (CTRLorALTer / LoRAdapter) teaches Stable Diffusion to follow the <i>shape</i> of a photo — depth structure, or now segmentation structure — while a text prompt controls everything else. You already know how a neuron and a basic neural net work; everything below builds on exactly that, one small idea at a time, until you can read <span class="mono">src/model.py</span> yourself and know what every line is for.</p>
+      <div class="hero-meta">
+        <span><b>Order matters.</b> Each lesson leans on the ones before it.</span>
+        <span><b>Updated in place.</b> Lessons 19–24 are this session's own segmentation work — same rule: every claim grounded in a real file read this session.</span>
+        <span><b>Two panel types:</b> <span style="color:var(--accent-ink)">▍concept</span> = the idea, plain English. <span style="color:var(--code-accent)">▍in this repo</span> = the real file that implements it.</span>
+        <span><b>Running example:</b> the depth-conditioning path — the one wired up by default in this repo.</span>
+      </div>
+    </header>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 1 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l1">
+      <div class="lesson-kicker"><span class="lesson-num">01</span><span class="tag">Foundation</span></div>
+      <h2 class="lesson-title">Numbers in, numbers out</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>You already know the core unit: a neuron takes some numbers in, multiplies each by a learned weight, adds them up, and squashes the result through a nonlinearity. A neural network is just many of those, wired together in layers. Everything in this guide — the image encoder, the diffusion model, the LoRA adapters — is that same idea, just organized cleverly and scaled up.</p>
+        <p>The one habit worth building early: stop picturing "understanding an image" or "generating a picture" as something mysterious. To every network in this repo, a photo is nothing but a grid of numbers — a 512×512 photo is 512 × 512 × 3 (red, green, blue) = <b>786,432 numbers</b>. A network is a function: numbers go in one end, a lot of multiply-and-add happens in the middle using millions of learned weights, and numbers come out the other end. "Training" nudges those weights so the output gets closer to what you wanted, repeated many thousands of times.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 2 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l2">
+      <div class="lesson-kicker"><span class="lesson-num">02</span><span class="tag">Foundation</span></div>
+      <h2 class="lesson-title">What "latent space" actually is</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>786,432 numbers per image is a lot to push through a network thousands of times during training — slow, memory-hungry. So: train one <i>separate</i>, smaller network, once, whose only job is compression — squeeze a photo down into a much smaller grid of numbers that still captures "what this photo looks like," well enough that a second small network can expand it back into (almost) the original photo.</p>
+        <p>Think of it like describing a face with a short list of dials instead of handing over the whole photograph: "roundness of face: 0.7, eye spacing: 0.3, lighting: warm..." A short list, but a <i>meaningful</i> one — nudge one dial and you get a slightly different, still-plausible face. That's a compressed <b>description</b>, not a random scramble.</p>
+        <p>That compressed grid is a <b>latent</b> ("hidden" representation). It's called a "space" because similar photos land as nearby points in it, the way similar addresses cluster on a map. The network that learns this compression is a <b>VAE</b> (Variational Autoencoder) — an <b>encoder</b> half (photo → latent) and a <b>decoder</b> half (latent → photo). One detail that matters later: the latent is still a <i>grid</i>, just a smaller one — its top-left still roughly corresponds to the photo's top-left.</p>
+      </div>
+      <figure class="diagram">
+        <div class="frame">
+          <svg viewBox="0 0 820 260" role="img" aria-label="A 512 by 512 pixel image, roughly 786 thousand numbers, is compressed by a frozen VAE encoder into a 64 by 64 by 4 latent grid, roughly 16 thousand numbers, which a VAE decoder can expand back into a photo.">
+            <defs>
+              <marker id="ar1" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><polygon points="0,0 7,3 0,6" fill="currentColor"/></marker>
+            </defs>
+            <g transform="translate(30,40)">
+              <rect class="box" x="0" y="0" width="150" height="150" rx="3"/>
+              <g class="flow" stroke-width="0.8" opacity="0.5">
+                <line x1="0" y1="37.5" x2="150" y2="37.5"/><line x1="0" y1="75" x2="150" y2="75"/><line x1="0" y1="112.5" x2="150" y2="112.5"/>
+                <line x1="37.5" y1="0" x2="37.5" y2="150"/><line x1="75" y1="0" x2="75" y2="150"/><line x1="112.5" y1="0" x2="112.5" y2="150"/>
+              </g>
+              <text class="lbl-strong" x="75" y="172" text-anchor="middle">Image (pixels)</text>
+              <text class="lbl-sm" x="75" y="188" text-anchor="middle">512 × 512 × 3 ≈ 786k numbers</text>
+            </g>
+            <line class="flow-accent" x1="200" y1="105" x2="330" y2="105" marker-end="url(#ar1)"/>
+            <text class="lbl" x="265" y="88" text-anchor="middle" fill="var(--accent-ink)">VAE encoder</text>
+            <text class="lbl-sm" x="265" y="123" text-anchor="middle">(frozen, learned once)</text>
+            <g transform="translate(345,75)">
+              <rect class="box-code" x="0" y="0" width="60" height="60" rx="3"/>
+              <g class="flow" stroke-width="0.7" opacity="0.5">
+                <line x1="0" y1="15" x2="60" y2="15"/><line x1="0" y1="30" x2="60" y2="30"/><line x1="0" y1="45" x2="60" y2="45"/>
+                <line x1="15" y1="0" x2="15" y2="60"/><line x1="30" y1="0" x2="30" y2="60"/><line x1="45" y1="0" x2="45" y2="60"/>
+              </g>
+              <text class="lbl-strong" x="30" y="82" text-anchor="middle">Latent</text>
+              <text class="lbl-sm" x="30" y="98" text-anchor="middle">64 × 64 × 4</text>
+              <text class="lbl-sm" x="30" y="112" text-anchor="middle">≈ 16k numbers</text>
+            </g>
+            <path class="flow-dash" d="M 345 155 C 300 190, 220 190, 200 150" marker-end="url(#ar1)"/>
+            <text class="lbl-sm" x="270" y="205" text-anchor="middle">VAE decoder (reverses it)</text>
+            <g transform="translate(470,55)">
+              <rect class="box" x="0" y="0" width="320" height="150" rx="4" opacity="0.5"/>
+              <text class="lbl-strong" x="16" y="26">Still a grid, not a flat list</text>
+              <text class="lbl-sm" x="16" y="48">A 64×64 latent still has spatial</text>
+              <text class="lbl-sm" x="16" y="64">structure — its top-left corresponds</text>
+              <text class="lbl-sm" x="16" y="80">to the image's top-left. This matters</text>
+              <text class="lbl-sm" x="16" y="96">later: the UNet processes this grid at</text>
+              <text class="lbl-sm" x="16" y="112">4 different sizes, and the depth mapper's</text>
+              <text class="lbl-sm" x="16" y="128">outputs must line up with each one.</text>
+            </g>
+          </svg>
+        </div>
+        <figcaption><b>Fig. 1 —</b> Everything downstream in this repo happens to the small right-hand grid, not the large left-hand photo. That's what "latent diffusion" means in Stable Diffusion's full name.</figcaption>
+      </figure>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="fileref">src/model.py:372-377</span> — <span class="mono">SD15.get_input()</span>, wrapped in <code class="inline">@torch.no_grad()</code> (line 363) so no gradients ever flow through the VAE:</p>
+        <pre><code>latents = self.vae.encode(imgs).latent_dist.sample()
+latents = latents * self.vae.config.scaling_factor</code></pre>
+        <p><span class="mono">self.vae</span> comes straight from the loaded Stable Diffusion pipeline (<span class="fileref">model.py:127</span>) and is never added to any optimizer — it stays frozen for the entire repo.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 3 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l3">
+      <div class="lesson-kicker"><span class="lesson-num">03</span><span class="tag">Foundation</span></div>
+      <h2 class="lesson-title">Diffusion: destroy the image, then learn to reverse it</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Take a real photo's latent grid (Lesson 2). Add a little random static. Add more. Keep going until it's pure static — nothing recognizable left. That's the <b>forward process</b>, and it isn't learned — it's arithmetic, you choose how much noise to add at each of many steps.</p>
+        <p>Now train a network to do the <b>reverse</b>: given a noisy latent and "how noisy is this, roughly," guess what noise was just added. If it can always guess correctly, you can subtract that guess, one small step at a time, and walk backwards from pure static to a real image. <b>Generation</b> = start from pure random static and run the reverse process for ~50 steps.</p>
+        <p>The network making that guess is the <b>UNet</b> — the single most important box in this guide, and the one everything else in this repo modifies. Everything from here on is about what feeds into it and how its own layers get patched.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="mono">SD15.forward()</span>, <span class="fileref">src/model.py:419, 475-477, 502</span> — the "add noise, guess it, compare" loop, one training step:</p>
+        <pre><code>noisy_latents = self.noise_scheduler.add_noise(latents, noise, timesteps)
+model_pred = self.unet(noisy_latents, timesteps,
+                        encoder_hidden_states=prompt_embeds).sample
+loss = F.mse_loss(model_pred.float(), target.float())</code></pre>
+        <p>That's the training loop's entire mathematical core. <span class="mono">self.noise_scheduler</span> is a <span class="mono">DDPMScheduler</span> built from the pipeline's own scheduler config (<span class="fileref">model.py:115-118</span>) — it decides exactly how much noise "timestep t" means.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 4 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l4">
+      <div class="lesson-kicker"><span class="lesson-num">04</span><span class="tag">Foundation</span></div>
+      <h2 class="lesson-title">The UNet's shape</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Picture a funnel: the network first <b>shrinks</b> the latent grid repeatedly (a coarser, more "global" view each step), then <b>expands</b> it back the same number of times (more precise again). Drawn out, it looks like the letter U — hence "UNet." Each shrink/expand step is a <b>resolution stage</b>.</p>
+        <p>The shrink side and the expand side are cross-wired with <b>skip connections</b> — fine detail computed on the way down gets handed straight across to the matching stage on the way up, so the network doesn't have to re-invent detail it already had.</p>
+        <p>Why this matters for us: every place a conditioning signal can attach exists at <i>one specific resolution stage</i>. A signal for the coarse, deep stage means something different than one for the detailed, shallow stage — so a conditioning map has to be produced at all 4 sizes, matched up correctly. That's the whole reason the "mapper" network exists (Lesson 11).</p>
+      </div>
+      <figure class="diagram">
+        <div class="frame">
+          <svg viewBox="0 0 760 470" role="img" aria-label="The UNet funnels the latent down through down_blocks 0 to 3 at resolutions 64, 32, 16, and 8, through the mid_block bottleneck, then back up through mirrored up_blocks to 64x64 again, with skip connections joining each down stage to its mirrored up stage, and depth numbers 0 to 3 assigned by resolution.">
+            <defs>
+              <marker id="ar2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><polygon points="0,0 7,3 0,6" fill="currentColor"/></marker>
+            </defs>
+            <g class="mono">
+              <rect class="box" x="30" y="20" width="220" height="58" rx="4"/>
+              <text class="lbl-strong" x="140" y="41" text-anchor="middle">down_blocks.0</text>
+              <text class="lbl-sm" x="140" y="57" text-anchor="middle">64×64 · 320ch · depth 0</text>
+              <rect class="box" x="30" y="110" width="220" height="58" rx="4"/>
+              <text class="lbl-strong" x="140" y="131" text-anchor="middle">down_blocks.1</text>
+              <text class="lbl-sm" x="140" y="147" text-anchor="middle">32×32 · 640ch · depth 1</text>
+              <rect class="box" x="30" y="200" width="220" height="58" rx="4"/>
+              <text class="lbl-strong" x="140" y="221" text-anchor="middle">down_blocks.2</text>
+              <text class="lbl-sm" x="140" y="237" text-anchor="middle">16×16 · 1280ch · depth 2</text>
+              <rect class="box" x="30" y="290" width="220" height="58" rx="4"/>
+              <text class="lbl-strong" x="140" y="311" text-anchor="middle">down_blocks.3</text>
+              <text class="lbl-sm" x="140" y="327" text-anchor="middle">8×8 · 1280ch · depth 3 (no attn)</text>
+              <line class="flow" x1="140" y1="78" x2="140" y2="108" marker-end="url(#ar2)"/>
+              <line class="flow" x1="140" y1="168" x2="140" y2="198" marker-end="url(#ar2)"/>
+              <line class="flow" x1="140" y1="258" x2="140" y2="288" marker-end="url(#ar2)"/>
+              <rect class="box-accent" x="255" y="360" width="250" height="58" rx="4"/>
+              <text class="lbl-strong" x="380" y="381" text-anchor="middle">mid_block (bottleneck)</text>
+              <text class="lbl-sm" x="380" y="397" text-anchor="middle">8×8 · 1280ch · depth = max_depth (3)</text>
+              <path class="flow" d="M 140 348 C 140 385, 200 389, 253 389" marker-end="url(#ar2)"/>
+              <rect class="box" x="510" y="290" width="220" height="58" rx="4"/>
+              <text class="lbl-strong" x="620" y="311" text-anchor="middle">up_blocks.0</text>
+              <text class="lbl-sm" x="620" y="327" text-anchor="middle">8×8 → 16×16 · depth 3</text>
+              <path class="flow" d="M 507 389 C 555 389, 570 350, 590 349" marker-end="url(#ar2)"/>
+              <rect class="box" x="510" y="200" width="220" height="58" rx="4"/>
+              <text class="lbl-strong" x="620" y="221" text-anchor="middle">up_blocks.1</text>
+              <text class="lbl-sm" x="620" y="237" text-anchor="middle">16×16 → 32×32 · depth 2</text>
+              <rect class="box" x="510" y="110" width="220" height="58" rx="4"/>
+              <text class="lbl-strong" x="620" y="131" text-anchor="middle">up_blocks.2</text>
+              <text class="lbl-sm" x="620" y="147" text-anchor="middle">32×32 → 64×64 · depth 1</text>
+              <rect class="box" x="510" y="20" width="220" height="58" rx="4"/>
+              <text class="lbl-strong" x="620" y="41" text-anchor="middle">up_blocks.3</text>
+              <text class="lbl-sm" x="620" y="57" text-anchor="middle">64×64 output · depth 0</text>
+              <line class="flow" x1="620" y1="288" x2="620" y2="258" marker-end="url(#ar2)"/>
+              <line class="flow" x1="620" y1="198" x2="620" y2="168" marker-end="url(#ar2)"/>
+              <line class="flow" x1="620" y1="108" x2="620" y2="78" marker-end="url(#ar2)"/>
+              <path class="flow-dash" d="M 250 49 C 400 49, 400 49, 508 49"/>
+              <path class="flow-dash" d="M 250 139 C 400 139, 400 139, 508 139"/>
+              <path class="flow-dash" d="M 250 229 C 400 229, 400 229, 508 229"/>
+              <path class="flow-dash" d="M 250 319 C 400 319, 400 319, 508 319"/>
+            </g>
+            <text class="lbl-sm" x="380" y="450" text-anchor="middle">dashed lines = skip connections, same-resolution stages paired left↔right</text>
+          </svg>
+        </div>
+        <figcaption><b>Fig. 2 —</b> This repo loads <span class="mono">runwayml/stable-diffusion-v1-5</span> (<span class="fileref">configs/model/sd15.yaml:6</span>) via <span class="mono">diffusers</span>, whose published UNet config sets <span class="mono">block_out_channels: [320, 640, 1280, 1280]</span> — 4 stages, 3 halvings (64→32→16→8), matched to a VAE that already divides by 8.</figcaption>
+      </figure>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p>The <span class="mono">depth</span> numbers on each box above are computed once per patched layer, in <span class="mono">add_lora_to_unet</span>, <span class="fileref">src/model.py:255-260</span>:</p>
+        <pre><code>if "mid_block" in path:      depth = self.max_depth
+elif "down_blocks" in path:  depth = int(path.split("down_blocks.")[1][0])
+elif "up_blocks" in path:    depth = self.max_depth - int(path.split("up_blocks.")[1][0])</code></pre>
+        <p><span class="mono">self.max_depth</span> itself, <span class="fileref">model.py:120</span>: <code class="inline">len(self.pipe.unet.config["block_out_channels"]) - 1</code> — read straight from the loaded UNet's own config, so this whole scheme adapts automatically to a UNet with a different number of stages (it's exactly how the SDXL path in Lesson 18 reuses the same code). Notice <span class="mono">up_blocks</span> depth is <i>mirrored</i> — <span class="mono">up_blocks.0</span> sits right after the bottleneck (depth 3), <span class="mono">up_blocks.3</span> produces the final output (depth 0). This depth number is exactly how each patched layer later knows which of the mapper's 4 outputs belongs to it (Lesson 11).</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 5 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l5">
+      <div class="lesson-kicker"><span class="lesson-num">05</span><span class="tag">Foundation</span></div>
+      <h2 class="lesson-title">How the text prompt gets in</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Inside each resolution stage (except the deepest) sits an <b>attention block</b>. Attention lets every "pixel" of the current feature grid look at every word of the prompt and ask "how relevant are you to me right now?" — this is <b>cross-attention</b>, because it's the image attending to text, not to itself. This is the <i>only</i> place text influences the UNet.</p>
+        <p>Mechanically, attention has query/key/value projections; the two that matter here are <span class="mono">to_k</span> and <span class="mono">to_v</span> — the layers that actually read the prompt's embeddings. Keep those two names in mind; they come back in Lesson 8 as the target for the <i>style</i> conditioning variant, as opposed to depth's conv-layer target.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="mono">prompt_embeds</span> — CLIP's encoding of your prompt, tokenized and run through <span class="mono">self.text_encoder</span> at <span class="fileref">src/model.py:390-397</span> — gets handed straight to the UNet call from Lesson 3:</p>
+        <pre><code>self.unet(noisy_latents, timesteps, encoder_hidden_states=prompt_embeds)</code></pre>
+        <p><span class="mono">ATTENTION_MODULES = ["to_k", "to_v"]</span> is declared right at the top of <span class="fileref">src/model.py:26</span> — the exact two sub-layer names the LoRA-patching code below looks for whenever it's asked to touch attention instead of convolution.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 6 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l6">
+      <div class="lesson-kicker"><span class="lesson-num">06</span><span class="tag">Adaptation</span></div>
+      <h2 class="lesson-title">Plain LoRA (no diffusion involved yet)</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Say a giant, frozen weight matrix <span class="mono">W</span> sits inside a network, and you want to adapt its behavior without touching its (huge, expensive) weights. Trick: leave <span class="mono">W</span> completely alone, and add a <i>parallel</i>, much smaller path next to it:</p>
+        <pre class="mono" style="background:var(--panel-code);border:1px solid var(--rule);border-radius:4px;padding:10px 14px;max-width:66ch;">output = W(x)  +  B(A(x))</pre>
+        <p><span class="mono">A</span> shrinks <span class="mono">x</span> down to a tiny "rank" (say 128 numbers instead of 1280), <span class="mono">B</span> expands it back up. <span class="mono">A</span> and <span class="mono">B</span> together have far fewer numbers than <span class="mono">W</span>, so they're cheap to train and cheap to save. You train <i>only</i> <span class="mono">A</span>/<span class="mono">B</span>; <span class="mono">W</span> never moves. This is standard LoRA — nothing repo-specific yet.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p>The entire pretrained UNet is frozen before any LoRA is even added — <span class="fileref">src/model.py:125</span>:</p>
+        <pre><code>self.unet.requires_grad_(False)</code></pre>
+        <p><span class="mono">NewStructLoRAConv</span> in <span class="fileref">src/lora.py:164-172</span> builds exactly the textbook form above: <span class="mono">self.W</span> a frozen <span class="mono">Conv2d</span> (<code class="inline">requires_grad_(False)</code> right after creation), <span class="mono">self.A</span> a rank-sized down-projection conv, <span class="mono">self.B</span> a 1×1 up-projection conv, <span class="mono">B</span>'s weights zero-initialized so the adapter starts as a no-op.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 7 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l7">
+      <div class="lesson-kicker"><span class="lesson-num">07</span><span class="tag">The core idea</span></div>
+      <h2 class="lesson-title">Making the LoRA conditional (FiLM)</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Plain LoRA's <span class="mono">B(A(x))</span> behaves identically no matter which image you're generating — a fixed, static edit. What if you want the edit to <i>change</i> depending on some extra input — "bend the output towards matching THIS depth map"? The correction needs to be a <b>function of</b> that extra signal, not a constant.</p>
+        <p>The standard trick is <b>FiLM</b> (Feature-wise Linear Modulation): compute a per-pixel <span class="mono">scale</span> and <span class="mono">shift</span> from your conditioning signal, and apply them as <span class="mono">scale × activation + shift</span> somewhere inside the network. Two small layers, conventionally <span class="mono">gamma</span> (→ scale) and <span class="mono">beta</span> (→ shift), turn your conditioning map into those numbers.</p>
+        <p>This one idea — <i>modulate the LoRA's internal activation using a conditioning signal, instead of leaving it alone</i> — is the entire novelty of this paper. Everything else you've read so far (frozen weight, low-rank path, UNet shape) is standard machinery this idea gets bolted onto.</p>
+      </div>
+      <figure class="diagram">
+        <div class="frame">
+          <svg viewBox="0 0 760 340" role="img" aria-label="Comparison: plain LoRA computes output equals W of x plus B of A of x, a fixed correction. Conditional LoRA in this repo adds one step in the middle: the low rank activation is scaled and shifted by gamma and beta, computed from a conditioning map c, before being expanded back up by B. That one FiLM step is the only difference.">
+            <defs><marker id="ar3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><polygon points="0,0 7,3 0,6" fill="currentColor"/></marker></defs>
+            <line x1="380" y1="10" x2="380" y2="330" class="flow" stroke-dasharray="3 4" opacity="0.4"/>
+            <text class="lbl-strong" x="190" y="26" text-anchor="middle">Plain LoRA</text>
+            <rect class="box" x="150" y="46" width="80" height="34" rx="3"/><text class="lbl" x="190" y="67" text-anchor="middle">x</text>
+            <line class="flow" x1="190" y1="80" x2="120" y2="110" marker-end="url(#ar3)"/>
+            <line class="flow" x1="190" y1="80" x2="260" y2="110" marker-end="url(#ar3)"/>
+            <rect class="box" x="70" y="112" width="100" height="34" rx="3"/><text class="lbl" x="120" y="133" text-anchor="middle">W (frozen)</text>
+            <rect class="box" x="210" y="112" width="100" height="34" rx="3"/><text class="lbl" x="260" y="133" text-anchor="middle">A (down)</text>
+            <line class="flow" x1="260" y1="146" x2="260" y2="176" marker-end="url(#ar3)"/>
+            <rect class="box" x="210" y="178" width="100" height="34" rx="3"/><text class="lbl" x="260" y="199" text-anchor="middle">B (up)</text>
+            <line class="flow" x1="120" y1="146" x2="150" y2="240" marker-end="url(#ar3)"/>
+            <line class="flow" x1="260" y1="212" x2="180" y2="240" marker-end="url(#ar3)"/>
+            <circle cx="165" cy="252" r="13" class="box"/><text class="lbl" x="165" y="257" text-anchor="middle">+</text>
+            <text class="lbl-sm" x="165" y="288" text-anchor="middle">output =</text>
+            <text class="lbl-sm mono" x="165" y="302" text-anchor="middle">W(x)+B(A(x))</text>
+            <text class="lbl-strong" x="575" y="26" text-anchor="middle" fill="var(--accent-ink)">Conditional LoRA — this repo</text>
+            <rect class="box" x="535" y="46" width="80" height="34" rx="3"/><text class="lbl" x="575" y="67" text-anchor="middle">x</text>
+            <line class="flow" x1="575" y1="80" x2="470" y2="110" marker-end="url(#ar3)"/>
+            <line class="flow" x1="575" y1="80" x2="645" y2="110" marker-end="url(#ar3)"/>
+            <rect class="box" x="420" y="112" width="100" height="34" rx="3"/><text class="lbl" x="470" y="133" text-anchor="middle">W (frozen)</text>
+            <rect class="box" x="595" y="112" width="100" height="34" rx="3"/><text class="lbl" x="645" y="133" text-anchor="middle">A (down)</text>
+            <line class="flow-accent" x1="645" y1="146" x2="645" y2="170" marker-end="url(#ar3)"/>
+            <rect class="box-accent" x="585" y="172" width="120" height="40" rx="3"/>
+            <text class="lbl" x="645" y="188" text-anchor="middle" fill="var(--accent-ink)">FiLM</text>
+            <text class="lbl-sm" x="645" y="203" text-anchor="middle">×scale +shift</text>
+            <line class="flow-accent" x1="645" y1="212" x2="645" y2="236" marker-end="url(#ar3)"/>
+            <rect class="box" x="595" y="238" width="100" height="34" rx="3"/><text class="lbl" x="645" y="259" text-anchor="middle">B (up)</text>
+            <rect class="box-code" x="415" y="172" width="110" height="34" rx="3"/>
+            <text class="lbl-sm" x="470" y="192" text-anchor="middle">c (depth map)</text>
+            <line class="flow" x1="525" y1="185" x2="580" y2="188" marker-end="url(#ar3)" stroke="var(--code-accent)"/>
+            <text class="lbl-sm" x="470" y="215" text-anchor="middle">via gamma / beta</text>
+            <line class="flow" x1="470" y1="146" x2="460" y2="284" marker-end="url(#ar3)"/>
+            <line class="flow" x1="645" y1="272" x2="570" y2="284" marker-end="url(#ar3)"/>
+            <circle cx="550" cy="296" r="13" class="box"/><text class="lbl" x="550" y="301" text-anchor="middle">+</text>
+            <text class="lbl-sm" x="550" y="322" text-anchor="middle">output = W(x)+B(FiLM(A(x), c))</text>
+          </svg>
+        </div>
+        <figcaption><b>Fig. 3 —</b> Everything on both sides is identical except the single copper FiLM box. That box is the entire "conditional" in Conditional LoRA — once you see it, you've seen the paper's core contribution.</figcaption>
+      </figure>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="mono">NewStructLoRAConv.forward()</span>, <span class="fileref">src/lora.py:177-197</span> — the class used for depth/structure conditioning:</p>
+        <pre><code>w_out = self.W(x)                                    # frozen conv, untouched
+cs = self.data_provider.get_batch()                   # tuple of 4 maps (Lesson 12)
+c = cs[self.depth]                                     # THIS layer's matching-resolution map
+element_shift = self.beta(c)                           # 1x1 conv: c -> per-pixel shift
+element_scale = self.gamma(c) + 1.0                     # 1x1 conv: c -> per-pixel scale
+a_out = self.A(x)                                       # low-rank down-projection
+a_cond = a_out * element_scale + element_shift           # <-- FiLM, right here
+b_out = self.B(a_cond)                                  # low-rank up-projection
+return w_out + b_out * self.lora_scale</code></pre>
+        <p>Every other line matches Lesson 6's plain LoRA exactly. Only the <span class="mono">a_cond = ...</span> line is new. <span class="mono">self.gamma</span> and <span class="mono">self.beta</span> are declared at <span class="fileref">lora.py:174-175</span> as plain 1×1 convolutions, no bias.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 8 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l8">
+      <div class="lesson-kicker"><span class="lesson-num">08</span><span class="tag">Architecture</span></div>
+      <h2 class="lesson-title">One config knob, three variants</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>A UNet has dozens of conv and attention layers scattered across its stages. You have to decide which ones get the FiLM treatment from Lesson 7 — every conv? Only attention? This choice is a config knob, not something baked into the class: the same conditional-LoRA machinery gets stamped onto however many layers a string-matching rule selects.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="mono">add_lora_to_unet()</span>, <span class="fileref">src/model.py:139</span>, walks every named weight in the UNet and string-matches its path against a config's <span class="mono">adaption_mode</span> (the full list of modes lives at <span class="fileref">model.py:31-48</span>). Three real configs in this repo pick three different combinations:</p>
+        <table class="glossary" style="margin-bottom:14px;">
+          <thead><tr><th>Config</th><th>adaption_mode</th><th>lora_cls</th><th>Targets</th></tr></thead>
+          <tbody>
+            <tr><td class="where mono">lora/struct.yaml</td><td class="mono">only_res_conv</td><td class="mono">NewStructLoRAConv</td><td>paths containing <code class="inline">0.conv1</code> / <code class="inline">1.conv1</code> — the first conv of each ResNet block</td></tr>
+            <tr><td class="where mono">lora/struct_attn.yaml</td><td class="mono">only_self</td><td class="mono">SimpleLoraLinear</td><td>paths containing <code class="inline">attn1</code> — self-attention, an alternate structure route</td></tr>
+            <tr><td class="where mono">lora/style.yaml</td><td class="mono">only_cross</td><td class="mono">SimpleLoraLinear</td><td>paths containing <code class="inline">attn2</code> — cross-attention's <span class="mono">to_k</span>/<span class="mono">to_v</span> from Lesson 5</td></tr>
+          </tbody>
+        </table>
+        <p>The matching itself, <span class="fileref">model.py:193-194</span> for the default depth path:</p>
+        <pre><code>if adaption_mode == "only_res_conv" and ("0.conv1" in path or "1.conv1" in path):
+    _continue = False   # i.e. patch this layer</code></pre>
+        <p>Every matching layer is physically swapped, <span class="fileref">model.py:314-318</span>: <code class="inline">setattr(parent_module, target_name, lora)</code> — the original <span class="mono">Conv2d</span> is replaced <i>in the live UNet</i> by the wrapper class holding that same frozen weight plus the new FiLM path. This guide's running example is the first row — <span class="mono">struct.yaml</span> + <span class="mono">NewStructLoRAConv</span> — because it's the configuration <span class="fileref">configs/experiment/train_struct_sd15.yaml</span> and <span class="fileref">sample_struct.yaml</span> actually wire up in this repo.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 9 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l9">
+      <div class="lesson-kicker"><span class="lesson-num">09</span><span class="tag">Depth, in depth</span></div>
+      <h2 class="lesson-title">The depth encoder, start to finish</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Before a conditioning map can reach the <span class="mono">c</span> in Lesson 7, a raw photo has to become a <i>canonical</i> map — something meaningful, same rough shape as the input, not just pixels. For structure conditioning, that canonical map is a <b>depth map</b>: for every pixel, roughly "how far away is this."</p>
+        <p>This repo doesn't train its own depth network. It reuses <b>MiDaS</b> (specifically the DPT-Hybrid variant) — a depth estimator someone else already trained on millions of photos, kept entirely frozen, purely as a feature extractor. You never see "depth" as a separate label in a dataset folder anywhere in this pipeline; it's produced live, every step, by running this frozen network.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="mono">DepthEstimator</span>, <span class="fileref">src/annotators/midas.py:14-64</span>, wraps <span class="mono">Intel/dpt-hybrid-midas</span> via HuggingFace <span class="mono">transformers</span> (<span class="fileref">midas.py:27</span>), frozen and in eval mode (<span class="fileref">midas.py:30-31</span>). Its <span class="mono">forward()</span> does exactly four things, in order:</p>
+        <pre><code>imgs = (imgs + 1.0) / 2.0                 # [-1,1] -> [0,1], MiDaS's expected range
+imgs = better_resize(imgs, self.model_size)  # crop+resize to MiDaS's own 384x384 input
+depth_map = self.depth_estimator(pixel_values=imgs).predicted_depth
+depth_map = F.interpolate(depth_map.unsqueeze(1), size=(self.size, self.size),
+                           mode="bicubic")            # up/down to this run's target size
+# then: per-image min-max normalize to [0,1], and repeat to 3 channels</code></pre>
+        <p><span class="mono">better_resize</span>, <span class="fileref">src/annotators/util.py:9-28</span>, is the same small utility used to feed every vision encoder in this repo: center-crop to a square using the shorter side, average-pool down if the crop is much bigger than the target (anti-aliased, not just a naive resize), then bilinear-interpolate to the exact target size.</p>
+        <p>The min-max step (<span class="fileref">midas.py:58-60</span>) matters: MiDaS outputs <i>relative</i> depth in arbitrary units, so each image's depth map is independently rescaled so its own nearest point is 0 and its own farthest point is 1 — there is no shared "meters" scale across images, only per-image relative structure. The final <code class="inline">torch.cat([depth_map] * 3, dim=1)</code> (<span class="fileref">midas.py:61</span>) triples the single depth channel into 3 identical channels purely so the shape matches what the mapper (Lesson 11) expects — an RGB-shaped tensor, even though there's no color information in it at all.</p>
+        <p><b>Contract, confirmed by reading the code, not assumed:</b> input <code class="inline">[B, 3, H, W]</code> float in <code class="inline">[-1, 1]</code>; output <code class="inline">[B, 3, size, size]</code> float in <code class="inline">[0, 1]</code>, where <span class="mono">size</span> comes from the run's Hydra config (<span class="fileref">configs/lora/encoder/midas.yaml:6</span>: <code class="inline">size: ${size}</code>).</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 10 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l10">
+      <div class="lesson-kicker"><span class="lesson-num">10</span><span class="tag">The trick</span></div>
+      <h2 class="lesson-title">No depth dataset needed — it reads its own target</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Here's the detail that makes the whole depth-conditioning setup click: during training, the depth map for image X is computed <i>from image X itself</i> — the exact same photo the diffusion model is being asked to reconstruct. There is no separate "depth" column in the dataset. The pipeline hands the frozen MiDaS network the training photo, gets a depth map back on the spot, and uses that as the conditioning signal for reconstructing that same photo.</p>
+        <p>Why that's the right call, not a shortcut: it means <i>any</i> folder of plain photos is trainable data — nothing needs to be pre-labelled with depth. And because the depth encoder is frozen and deterministic, the model can't "cheat" by ignoring the depth map — the depth map and the target photo are, by construction, perfectly consistent with each other every single step.</p>
+        <p>At generation time this flips into the actual product: you hand the model a real reference photo, it live-extracts that photo's depth structure the same way, and the diffusion process generates a <i>new</i> image — different content, different style, whatever the prompt says — constrained to follow that same depth structure. That's the "0-Shot Control" in this repo's name: no retraining needed to condition on a new photo's structure.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="fileref">train.py:143-148</span> — the training batch's own images are reused as the conditioning input, once per active LoRA:</p>
+        <pre><code>imgs = batch["jpg"]
+imgs = imgs.to(accelerator.device)
+imgs = imgs.clip(-1.0, 1.0)
+cs = [imgs] * n_loras          # same photo, handed to every conditioning encoder</code></pre>
+        <p>Then inside <span class="mono">SD15.forward()</span>, <span class="fileref">model.py:454-472</span>, that same tensor (named <span class="mono">lora_c</span> there) is what the depth encoder actually sees:</p>
+        <pre><code>for i, (encoder, dp, mapper, lora_c) in enumerate(zip(encoders, self.dps, mappers, cs)):
+    ...
+    cond = encoder(lora_c)      # depth map, extracted from THIS SAME training image
+    mapped_cond = mapper(cond)
+    dp.set_batch(mapped_cond)</code></pre>
+        <p>Meanwhile <span class="mono">latents</span> — what the UNet is being trained to denoise back into — was built from that identical <span class="mono">imgs</span> tensor back in Lesson 2's VAE step. Same photo, two uses: ground truth to reconstruct, and (via MiDaS) the structural hint telling the model what shape that reconstruction should take. The validation logging code confirms this is treated as a real, inspectable signal, not an incidental side effect — <span class="fileref">train.py:225-227</span>: <code class="inline">if cfg.get("log_c", False): lp = model.encoders[0](cs[-1]).cpu()</code> literally re-runs the depth encoder just to save the depth map image to TensorBoard.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 11 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l11">
+      <div class="lesson-kicker"><span class="lesson-num">11</span><span class="tag">Depth, in depth</span></div>
+      <h2 class="lesson-title">One map, four resolutions: the mapper</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>The depth map from Lesson 9 is one flat grid at one resolution. But Lesson 4 showed the UNet has 4 stages at 4 different sizes — a signal meant for the 64×64 stage is the wrong shape for the 8×8 stage. So a small trainable CNN, the <b>mapper</b>, takes the one depth map in and produces <i>four</i> versions of it, each already at the right resolution for one UNet stage. Unlike the depth estimator, the mapper is <i>not</i> frozen — it's trained from scratch alongside the LoRA adapters, learning how to best translate "depth" into "a FiLM-friendly per-layer signal."</p>
+      </div>
+      <figure class="diagram">
+        <div class="frame">
+          <svg viewBox="0 0 920 260" role="img" aria-label="A raw conditioning image goes into the frozen MiDaS depth encoder. The depth map goes into the trainable mapper network, which produces four resolution taps at 64, 32, 16 and 8. Those four go into the DataProvider mailbox, which each patched UNet conv layer reads its own matching depth from.">
+            <defs><marker id="ar4" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><polygon points="0,0 7,3 0,6" fill="currentColor"/></marker></defs>
+            <rect class="box" x="15" y="95" width="130" height="60" rx="4"/>
+            <text class="lbl-strong" x="80" y="120" text-anchor="middle">Raw image</text>
+            <text class="lbl-sm" x="80" y="136" text-anchor="middle">[-1, 1], any H×W</text>
+            <line class="flow" x1="145" y1="125" x2="185" y2="125" marker-end="url(#ar4)"/>
+            <rect class="box-code" x="188" y="80" width="170" height="90" rx="4"/>
+            <text class="lbl-strong" x="273" y="103" text-anchor="middle">DepthEstimator</text>
+            <text class="lbl-sm" x="273" y="120" text-anchor="middle">MiDaS / DPT-Hybrid</text>
+            <text class="lbl-sm" x="273" y="136" text-anchor="middle" fill="var(--code-accent)">frozen — Lesson 9</text>
+            <text class="lbl-sm" x="273" y="151" text-anchor="middle">same image being denoised</text>
+            <line class="flow" x1="358" y1="125" x2="398" y2="125" marker-end="url(#ar4)"/>
+            <text class="lbl-sm" x="378" y="112" text-anchor="middle">[B,3,512,512]</text>
+            <text class="lbl-sm" x="378" y="145" text-anchor="middle">in [0,1]</text>
+            <rect class="box-code" x="401" y="80" width="170" height="90" rx="4"/>
+            <text class="lbl-strong" x="486" y="103" text-anchor="middle">Mapper</text>
+            <text class="lbl-sm" x="486" y="120" text-anchor="middle">FixedStructureMapper15</text>
+            <text class="lbl-sm" x="486" y="136" text-anchor="middle">trainable · 4 taps</text>
+            <text class="lbl-sm" x="486" y="152" text-anchor="middle">c_dim = 128 channels</text>
+            <line class="flow" x1="571" y1="125" x2="611" y2="125" marker-end="url(#ar4)"/>
+            <rect class="box-accent" x="614" y="20" width="160" height="220" rx="4"/>
+            <text class="lbl-strong" x="694" y="38" text-anchor="middle" fill="var(--accent-ink)">DataProvider</text>
+            <rect class="box" x="628" y="48" width="132" height="38" rx="3"/><text class="lbl-sm" x="694" y="71" text-anchor="middle">depth 0 · 64×64</text>
+            <rect class="box" x="628" y="92" width="132" height="38" rx="3"/><text class="lbl-sm" x="694" y="115" text-anchor="middle">depth 1 · 32×32</text>
+            <rect class="box" x="628" y="136" width="132" height="38" rx="3"/><text class="lbl-sm" x="694" y="159" text-anchor="middle">depth 2 · 16×16</text>
+            <rect class="box" x="628" y="180" width="132" height="38" rx="3"/><text class="lbl-sm" x="694" y="203" text-anchor="middle">depth 3 · 8×8</text>
+            <line class="flow-accent" x1="774" y1="125" x2="820" y2="125" marker-end="url(#ar4)"/>
+            <rect class="box-accent" x="823" y="90" width="90" height="70" rx="4"/>
+            <text class="lbl-sm" x="868" y="112" text-anchor="middle">UNet conv</text>
+            <text class="lbl-sm" x="868" y="126" text-anchor="middle">layers</text>
+            <text class="lbl-sm" x="868" y="144" text-anchor="middle">(Fig. 2)</text>
+            <text class="lbl-sm" x="694" y="252" text-anchor="middle">each layer reads only its own <tspan class="mono">[self.depth]</tspan> compartment</text>
+          </svg>
+        </div>
+        <figcaption><b>Fig. 4 —</b> The mapper's four resolution taps line up exactly with Fig. 2's four UNet stages. This is the full delivery mechanism for one training step, depth-conditioning specifically.</figcaption>
+      </figure>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="mono">FixedStructureMapper15</span>, <span class="fileref">src/mapper_network.py:18-82</span>, is a plain stride-2 downsampling CNN with a <span class="mono">1×1 conv</span> "tap" at each stop. For a 512×512 input, computed directly from the strides in the code (not assumed): <span class="mono">self.down</span> has three stride-2 convs (512→256→128→<b>64</b>), then <span class="mono">block1</span>/<span class="mono">block2</span>/<span class="mono">block3</span> each halve again — 64→<b>32</b>→<b>16</b>→<b>8</b>. Four stopping points, four <code class="inline">1×1 Conv2d(128, c_dim)</code> taps (<span class="mono">out0..out3</span>, <span class="fileref">mapper_network.py:64-67</span>), each producing a <code class="inline">c_dim</code>-channel (128 by default) map at exactly one of those four sizes — 64, 32, 16, 8 — the same four numbers as Fig. 2's UNet stages, by construction rather than coincidence.</p>
+        <pre><code>def forward(self, x, *args, **kwargs):
+    base = self.down(x)                 # 512 -> 64
+    b0 = self.block0(base)              # identity, stays 64
+    b1 = self.block1(b0)                # 64 -> 32
+    b2 = self.block2(b1)                # 32 -> 16
+    b3 = self.block3(b2)                # 16 -> 8
+    return self.out0(b0), self.out1(b1), self.out2(b2), self.out3(b3)</code></pre>
+        <p>One forward pass through the whole encoder→mapper chain, <span class="fileref">model.py:470-472</span>:</p>
+        <pre><code>cond = encoder(lora_c)          # depth map, [B,3,512,512]
+mapped_cond = mapper(cond)      # tuple of FOUR tensors, one per UNet stage
+dp.set_batch(mapped_cond)       # DataProvider now holds all 4 (Lesson 12)</code></pre>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 12 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l12">
+      <div class="lesson-kicker"><span class="lesson-num">12</span><span class="tag">Depth, in depth</span></div>
+      <h2 class="lesson-title">The DataProvider mailbox</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>The mapper runs <i>once</i> per training step and produces all 4 resolution maps at once. But dozens of individual conv layers, scattered across the UNet, each need to read <i>their own</i> matching map during the UNet's single forward pass. Rather than threading that tuple through every layer's function call, the codebase uses a tiny shared object — set once at the top, read from many places below — as a mailbox.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="mono">DataProvider</span>, <span class="fileref">src/utils.py:18-35</span>, is intentionally dumb — no logic beyond a getter and setter:</p>
+        <pre><code>class DataProvider:
+    def set_batch(self, batch): self.batch = batch
+    def get_batch(self):
+        assert self.batch is not None, "Error: need to set a batch first"
+        return self.batch</code></pre>
+        <p>Each conditioning source (depth here) gets its own <span class="mono">DataProvider</span> instance, created once in <span class="mono">add_lora_from_config</span> (<span class="fileref">utils.py:63</span>) and handed by reference to <i>every</i> patched layer for that source when they're constructed (<span class="fileref">model.py:271-272, 292</span>: <code class="inline">data_provider=data_provider</code>). Lesson 11's <code class="inline">dp.set_batch(mapped_cond)</code> fills the mailbox once per step; Lesson 7's <code class="inline">cs = self.data_provider.get_batch()</code> is every individual conv layer reading from that same mailbox and picking out its own <code class="inline">[self.depth]</code> slot. One write, many reads — that's the entire pattern.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 13 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l13">
+      <div class="lesson-kicker"><span class="lesson-num">13</span><span class="tag">Depth, in depth</span></div>
+      <h2 class="lesson-title">Swapping the encoder: same slot, different input</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Look again at Lesson 9's contract: the mapper doesn't care <i>what kind</i> of map it receives, only its shape and value range — <code class="inline">[B, 3, H, W]</code> float in a fixed range. Any frozen network satisfying that contract can sit in the encoder slot. This repo doesn't just claim that in the abstract — it ships more than one.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="fileref">src/annotators/</span> holds several interchangeable encoders, each wrapped to the same rough in/out shape:</p>
+        <ul class="tight">
+          <li><b><span class="mono">midas.py</span> — <span class="mono">DepthEstimator</span></b>: this guide's running example, depth structure (Lesson 9).</li>
+          <li><b><span class="mono">canny.py</span> — <span class="mono">CannyDetector</span></b>: classic OpenCV edge detection, no learned weights at all — <code class="inline">cv2.Canny</code> per image, thresholded and channel-repeated to match the same 3-channel shape.</li>
+          <li><b><span class="mono">hed.py</span> — <span class="mono">TorchHEDdetector</span></b>: a small pretrained edge-detection CNN (<span class="mono">ControlNetHED_Apache2</span>), frozen, producing softer, more holistic edge maps than Canny.</li>
+          <li><b><span class="mono">style.py</span> / <span class="mono">openclip.py</span> — <span class="mono">VisionModel</span></b>: not a spatial map at all — a single pooled CLIP image-embedding vector, used by the <i>style</i> conditioning path (<span class="fileref">configs/lora/style.yaml</span>, Lesson 8's third row) instead of depth's per-pixel map.</li>
+        </ul>
+        <p>Which one loads is a one-line Hydra swap — compare <span class="fileref">configs/lora/encoder/midas.yaml</span> (<code class="inline">_target_: src.annotators.midas.DepthEstimator</code>) against <span class="fileref">configs/lora/encoder/canny.yaml</span> or <span class="fileref">hed.yaml</span> — same mount point in <span class="fileref">configs/lora/struct.yaml</span>'s <span class="mono">encoder: ???</span> default, a different Python class instantiated underneath. Everything downstream — mapper, DataProvider, FiLM math, layer targeting — is unchanged, because none of it was ever written to know what "depth" specifically means; it only knows tensor shapes.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 14 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l14">
+      <div class="lesson-kicker"><span class="lesson-num">14</span><span class="tag">Running the repo</span></div>
+      <h2 class="lesson-title">Hydra: how a dozen yaml files become one Python object</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Every knob you've seen so far — <span class="mono">adaption_mode</span>, which encoder, image size, learning rate — lives in a small yaml file, not scattered through Python code. <a href="https://hydra.cc" target="_blank" rel="noopener">Hydra</a> is the library that stitches many small yaml files into one merged config tree at startup, then (in this repo) turns that tree straight into live Python objects.</p>
+        <p>Three ideas make the whole system click:</p>
+        <ul class="tight">
+          <li><b>Config groups</b> — a folder of interchangeable yaml files, like <span class="mono">configs/model/</span> holding both <span class="mono">sd15.yaml</span> and <span class="mono">sdxl.yaml</span>. Only one file from a group is active per run.</li>
+          <li><b>Defaults list</b> — each yaml's own <span class="mono">defaults:</span> block says which file from each group it wants, or <span class="mono">???</span> to mean "you must supply one." An <span class="mono">override</span> entry lets a more specific config swap out a choice a more general one already made.</li>
+          <li><b><span class="mono">_target_</span> + <span class="mono">instantiate</span></b> — any yaml dict with a <span class="mono">_target_</span> key names a real Python import path. <span class="mono">hydra.utils.instantiate(cfg)</span> walks the whole merged tree and actually constructs every such object, innermost first, wiring constructor arguments straight from the surrounding yaml keys.</li>
+        </ul>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p>The root config, <span class="fileref">configs/train.yaml:1-5</span>, declares the mandatory groups and leaves room for an experiment file to override everything:</p>
+        <pre><code>defaults:
+  - data: ???
+  - model: ???
+  - _self_
+  - experiment: null</code></pre>
+        <p>An experiment file, e.g. <span class="fileref">configs/experiment/train_struct_sd15.yaml:1-9</span>, starts with <code class="inline"># @package _global_</code> (its keys merge straight into the top-level config, not nested under <span class="mono">experiment:</span>) and picks concrete choices for every group in one place:</p>
+        <pre><code>defaults:
+  - /lora@lora.struct: struct                          # mount configs/lora/struct.yaml at cfg.lora.struct
+  - override /lora/encoder@lora.struct.encoder: midas   # fill struct.yaml's encoder: ??? with midas.yaml
+  - override /model: sd15
+  - override /data: local</code></pre>
+        <p>Running <code class="inline">python train.py experiment=train_struct_sd15</code> (or, for sampling, exactly the README's <code class="inline">python sample.py experiment=sample_struct</code> pattern) tells Hydra to load that one experiment file on top of <span class="mono">train.yaml</span>/<span class="mono">sample.yaml</span>. Each individual leaf yaml carries a <span class="mono">_target_</span> — <span class="fileref">configs/model/sd15.yaml:4</span>: <code class="inline">_target_: src.model.SD15</code>, <span class="fileref">configs/lora/encoder/midas.yaml:4</span>: <code class="inline">_target_: src.annotators.midas.DepthEstimator</code>. <span class="fileref">train.py:54</span>'s single line <code class="inline">cfg = hydra.utils.instantiate(cfg)</code> turns the entire merged tree of yaml into real, already-constructed <span class="mono">SD15</span>, <span class="mono">DepthEstimator</span>, and <span class="mono">FixedStructureMapper15</span> instances — after that line, <code class="inline">cfg.model</code> genuinely <i>is</i> a live PyTorch module, not a dict describing one. Interpolations like <span class="mono">midas.yaml</span>'s <code class="inline">size: ${size}</code> pull from the one <span class="mono">size:</span> value set higher up (<span class="fileref">train_struct_sd15.yaml:22</span>: <code class="inline">size: 512</code>) — a single source of truth shared across model, encoder, and data config, instead of three copies that could silently drift apart.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 15 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l15">
+      <div class="lesson-kicker"><span class="lesson-num">15</span><span class="tag">Running the repo</span></div>
+      <h2 class="lesson-title">Code flow: training, step by step</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>With every earlier lesson's pieces named, <span class="fileref">train.py</span> reads as a straight-line story: build the model, attach the LoRA(s), loop over the data, and every so often generate a sample image to check progress.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <ol class="tight" style="padding-left:22px;">
+          <li><b>Compose &amp; instantiate</b> (<span class="fileref">train.py:33-58</span>) — Hydra loads the config (Lesson 14), <code class="inline">instantiate</code> builds the real <span class="mono">SD15</span> model, moved to the accelerator's device.</li>
+          <li><b>Attach LoRAs</b> (<span class="fileref">train.py:61</span>, delegating to <span class="fileref">utils.py:48-112</span> <span class="mono">add_lora_from_config</span>) — for each entry under <span class="mono">cfg.lora</span> (here, just <span class="mono">struct</span>), build a fresh <span class="mono">DataProvider</span>, call <span class="mono">model.add_lora_to_unet</span> (Lesson 8's layer-swap), and optionally load an existing checkpoint.</li>
+          <li><b>Optimizer</b> (<span class="fileref">train.py:71-86</span>) — one <span class="mono">AdamW</span> over three parameter groups: the LoRA <span class="mono">A</span>/<span class="mono">B</span>/<span class="mono">gamma</span>/<span class="mono">beta</span> weights (<span class="mono">model.params_to_optimize</span>), the mapper's weights, and (if unfrozen) the encoder's weights. <span class="mono">self.unet.requires_grad_(False)</span> from Lesson 6 means the base UNet weights never appear here.</li>
+          <li><b>Per-step training</b> (<span class="fileref">train.py:141-168</span>) — pull a batch, build <code class="inline">cs = [imgs] * n_loras</code> (Lesson 10), call <code class="inline">model.forward_easy(imgs, prompts, cs, ...)</code> which internally does everything from Lessons 2, 3, 7, 9, 11, 12 in one pass, then <code class="inline">accelerator.backward(loss)</code> and an optimizer step.</li>
+          <li><b>Periodic validation</b> (<span class="fileref">train.py:179-282</span>, every <span class="mono">cfg.val_steps</span>) — switch to eval mode, run real image generation (Lesson 16's sampling path) on a few held-out batches, log the generated images plus the conditioning map itself to TensorBoard, then save a checkpoint via <span class="fileref">utils.py:136-144</span> <span class="mono">save_checkpoint</span> before resuming training.</li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 16 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l16">
+      <div class="lesson-kicker"><span class="lesson-num">16</span><span class="tag">Running the repo</span></div>
+      <h2 class="lesson-title">Code flow: sampling, step by step</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p><span class="fileref">sample.py</span> is the script the README's <code class="inline">python sample.py experiment=...</code> usage actually runs. It's shorter than training because there's no loss, no backward pass, no optimizer — just: load a trained checkpoint, feed it real conditioning images, save the outputs.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <ol class="tight" style="padding-left:22px;">
+          <li><b>Compose, instantiate, load checkpoint</b> (<span class="fileref">sample.py:41-65</span>) — same Hydra/instantiate pattern as training, plus <span class="mono">add_lora_from_config</span> now actually finding a <span class="mono">ckpt_path</span> and loading real trained weights into the swapped-in LoRA layers and mapper (<span class="fileref">utils.py:88-104</span>).</li>
+          <li><b>Freeze for inference</b> (<span class="fileref">sample.py:84-85</span>) — <code class="inline">unet.requires_grad_(False); unet.eval()</code>.</li>
+          <li><b>Per-batch sampling</b> (<span class="fileref">sample.py:94-132</span>) — pull a conditioning image from the val dataloader, build <code class="inline">cs = [imgs for _ in model.mappers]</code> (Lesson 10's live-extraction trick, now on whatever reference photo you supplied), then <code class="inline">model.sample(**pipeline_args)</code>.</li>
+          <li><b><span class="mono">SD15.sample_easy</span></b> (<span class="fileref">model.py:649-713</span>) — for each conditioning source, doubles the map into a <code class="inline">[zeros, real_map]</code> pair (Lesson 17's classifier-free guidance), runs the encoder+mapper+<span class="mono">DataProvider</span> chain once, then calls <span class="mono">self.pipe(...)</span> — <span class="mono">diffusers</span>'s own multi-step denoising loop, which repeatedly calls the now-patched UNet exactly as in training, just without gradients and for ~50 steps starting from pure noise.</li>
+          <li><b>Save outputs</b> (<span class="fileref">sample.py:131-143</span>) — each generated image and its input conditioning image are written to disk side by side, so you can directly compare "the depth I asked for" against "the depth the output actually has."</li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 17 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l17">
+      <div class="lesson-kicker"><span class="lesson-num">17</span><span class="tag">Running the repo</span></div>
+      <h2 class="lesson-title">Why conditioning gets randomly dropped</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>If a model is <i>always</i> shown a prompt and <i>always</i> shown a depth map, it never learns what to do without them — and at generation time you often want to dial the strength of conditioning up or down, not just have it fully on. The standard fix is <b>classifier-free guidance (CFG)</b>: during training, randomly blank out the condition some small fraction of the time, so the network also learns the "no condition" case. At generation time, run the model twice per step — once with the real condition, once with it blanked — and push the output <i>away</i> from the unconditioned guess and <i>towards</i> the conditioned one, by a tunable amount. That amount is the familiar "guidance scale" slider.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p>Two independent dropout sites, both controlled by <span class="mono">c_dropout</span> (default <code class="inline">0.05</code>, <span class="fileref">model.py:60</span>). Text prompt dropout, <span class="fileref">model.py:380</span>:</p>
+        <pre><code>prompts = ["" if random.random() < self.c_dropout else p for p in prompts]</code></pre>
+        <p>Depth-map dropout, per conditioning source, <span class="fileref">model.py:456-459</span>:</p>
+        <pre><code>dropout_mask = torch.rand(bsz, device=lora_c.device) < self.c_dropout
+lora_c[dropout_mask] = torch.zeros_like(lora_c[dropout_mask])</code></pre>
+        <p>At generation time, <span class="mono">sample_custom</span>, <span class="fileref">model.py:580-586, 626-627</span>, builds the paired batch and combines the two predictions:</p>
+        <pre><code>c = torch.cat([neg_c, c])   # [unconditioned copy, real conditioned copy]
+...
+noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)</code></pre>
+        <p><span class="mono">guidance_scale</span> itself is a plain constructor argument (<span class="fileref">model.py:61</span>, default <code class="inline">7.5</code>) set per-experiment in configs like <span class="fileref">sample_struct.yaml:24</span>.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 18 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l18">
+      <div class="lesson-kicker"><span class="lesson-num">18</span><span class="tag">Also in this repo</span></div>
+      <h2 class="lesson-title">SDXL and B-LoRA: the same mechanism, reused</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Every lesson above uses Stable Diffusion 1.5 as the concrete example, but nothing about the conditional-LoRA mechanism is SD1.5-specific — it only needed a UNet with named, path-addressable layers and a handful of resolution stages. This repo also ships a second full model class for SDXL, a larger UNet with the same fundamental shape (just bigger, and with an extra pooled/time conditioning input), reusing the exact same <span class="mono">add_lora_to_unet</span> layer-matching code from Lesson 8.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="mono">SDXL(ModelBase)</span>, <span class="fileref">src/model.py:716-935</span>, mirrors <span class="mono">SD15</span>'s structure — same frozen-UNet setup, same LoRA-patching call — with SDXL's extra pooled-embedding and time-id conditioning threaded through <span class="mono">get_conditioning</span> (<span class="fileref">model.py:735-775</span>). Its matching mapper, <span class="mono">FixedStructureMapperXL</span> (<span class="fileref">mapper_network.py:85-131</span>), produces <i>three</i> taps instead of four — SDXL's UNet only has 3 resolution stages, one fewer than SD1.5's 4.</p>
+        <p>Separately, this repo implements <a href="https://b-lora.github.io/B-LoRA/" target="_blank" rel="noopener">B-LoRA</a>'s content/style disentanglement as two more <span class="mono">adaption_mode</span> values, <span class="fileref">model.py:202-213</span>: <span class="mono">b-lora_content</span> targets only <code class="inline">up_blocks.0.attentions.0</code>, <span class="mono">b-lora_style</span> only <code class="inline">up_blocks.0.attentions.1</code> — two specific attention blocks that prior research found separately encode an image's content versus its style. <span class="fileref">configs/experiment/sample_b-lora_sdxl.yaml</span> wires this up on SDXL directly; setting <span class="mono">adaption_mode</span> to just one of the two lets you condition on <i>only</i> content or <i>only</i> style from a reference image, per the README's usage note.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 19 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l19">
+      <div class="lesson-kicker"><span class="lesson-num">19</span><span class="tag">Extending to segmentation</span></div>
+      <h2 class="lesson-title">Why SDXL, not SD1.5</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Lesson 4 derived a hard rule for SD1.5: height and width must both be divisible by 64, because the VAE divides by 8 and the UNet's 4 stages add 3 more halvings (2³ = 8; 8×8 = 64). SDXL's UNet has a different shape — only 3 stages, so only 2 internal halvings — which relaxes that rule to divisible by 32 (8 × 2² = 32). That's not a cosmetic difference: a dataset whose native resolution satisfies one constraint but not the other has to be resized for one model and not the other.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p>Confirmed directly from the published UNet config, not assumed: <span class="mono">stabilityai/stable-diffusion-xl-base-1.0</span>'s <span class="mono">unet/config.json</span> sets <code class="inline">block_out_channels: [320, 640, 1280]</code> — 3 entries, not SD1.5's 4. For this session's real target resolution, 1280×800: 1280÷64=20 but 800÷64=12.5 (SD1.5 can't take it natively), while 1280÷32=40 and 800÷32=25 (SDXL can, exactly, no resize at all).</p>
+        <p>Because <span class="mono">self.max_depth</span> is computed generically from the loaded UNet's own config (<span class="fileref">model.py:129</span>: <code class="inline">len(self.pipe.unet.config["block_out_channels"]) - 1</code>), every piece of Lesson 8's layer-patching logic already adapts automatically — no SDXL-specific branch needed there. The one real gap: this repo had no way to load a better VAE than whatever ships with the base checkpoint. Added <code class="inline">vae_path</code> to <span class="mono">ModelBase.__init__</span> (<span class="fileref">model.py:59, 92-96</span>), used to load <span class="mono">madebyollin/sdxl-vae-fp16-fix</span> — the community-standard fix for SDXL's known fp16 color/stability issues — the same mechanism the existing <span class="mono">tiny_vae</span> option already used for a different purpose.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 20 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l20">
+      <div class="lesson-kicker"><span class="lesson-num">20</span><span class="tag">Extending to segmentation</span></div>
+      <h2 class="lesson-title">Precomputed maps: skip_encode for real</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Lesson 10's depth path is <i>live</i>: MiDaS runs fresh, every training step, on the same image being denoised. Segmentation flips that: SegFormer-B5 is heavier, so instead of running it every step, it runs <i>once</i>, offline, ahead of time, over every training image — and training just loads the finished result off disk. The architecture doesn't need to know which strategy produced the map; it only needs the map in the same shape as before.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="mono">seg_map_calculations.py</span> walks a dataset (several input modes: a single image, a JSONL manifest, a folder scan, or a <span class="mono">data_dir</span> of existing split manifests), runs <span class="mono">SegmentationEncoder.label_ids()</span> once per image, and saves the result as an 8-bit class-ID PNG — pixel <i>value</i> is the class id (0–18), not a color. Output is a standard three-field manifest:</p>
+        <pre><code>{"raw_image_path": "...", "seg_path": "...", "prompt": "..."}</code></pre>
+        <p><span class="mono">SegJsonDataset._load_seg_colormap</span> (<span class="fileref">src/data/local_seg.py</span>) loads that PNG at training time, resizes with <code class="inline">NEAREST</code> only (averaging class ids during a smoother resize would invent classes that were never there), and colourises it into the same <code class="inline">[3, H, W]</code>-shaped tensor a live encoder would have produced. <span class="mono">segformer_training.py</span> then calls <code class="inline">model.forward_easy(..., skip_encode=True)</code> — the exact switch documented in Lesson 16, now actually exercised for the first time by this repo's own training code, not just theorized.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 21 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l21">
+      <div class="lesson-kicker"><span class="lesson-num">21</span><span class="tag">Extending to segmentation</span></div>
+      <h2 class="lesson-title">The segmentation encoder</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Two families of model can turn a photo into "what's in each part of this scene": a dense per-pixel classifier (one forward pass, every pixel gets a class), or an open-vocabulary detector-plus-segmenter like Grounded-SAM (text-prompted boxes, then a mask per box). For a fixed, well-covered taxonomy like Cityscapes' 19 driving classes, the dense classifier wins on every axis that matters here: roughly 20× faster per image (real numbers, not estimated: SAM-style mask generation runs ~1.65s/image, dense classifiers ~0.06–0.08s/image), and it handles "stuff" classes (road, sky, vegetation) natively, where box-shaped prompts struggle since those regions don't have clean rectangular extents.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="mono">SegmentationEncoder</span> (<span class="fileref">src/encoders/seg_encoder.py</span>) wraps <span class="mono">nvidia/segformer-b5-finetuned-cityscapes-1024-1024</span> via HuggingFace <span class="mono">transformers</span>, frozen, matching every other annotator's contract: <code class="inline">[-1,1]</code> image in. Unlike depth (Lesson 9), it does <i>not</i> force a square crop first — SegFormer's Mix-FFN has no fixed positional embedding, so it handles arbitrary <code class="inline">(H, W)</code> natively, sidestepping the pad/crop tradeoff depth's own <span class="mono">better_resize</span> has to make.</p>
+        <p><span class="mono">SEG_CITYSCAPES_PALETTE</span> is the single source of truth for id↔colour everywhere in the pipeline — <span class="mono">seg_colorize_ids</span>/<span class="mono">seg_ids_from_colormap</span> are exact inverses of each other (verified: round-tripping random class ids through colourise-then-invert reproduces them exactly, both batched and single-image). <span class="mono">.live_available = True</span> marks that this particular encoder <i>can</i> be re-run on a freshly generated image — which is what makes Lesson 24's accuracy check possible at all.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 22 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l22">
+      <div class="lesson-kicker"><span class="lesson-num">22</span><span class="tag">Extending to segmentation</span></div>
+      <h2 class="lesson-title">A real bug, found and fixed</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>A parameter that's declared but never read is a sneaky bug: the function signature looks like it supports something, callers pass it in good faith, and nothing crashes — it's just silently ignored. This is exactly the kind of gap that only surfaces by tracing every call site of a flag, not by reading one method and assuming its siblings match.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p>Tracing every <span class="mono">skip_encode</span> call site turned up exactly that. <span class="mono">SD15.forward()</span> (<span class="fileref">model.py:528</span>) had the correct branch all along — the pattern every other method should have matched:</p>
+        <pre><code>if skip_encode:
+    cond = lora_c
+else:
+    cond = encoder(lora_c)</code></pre>
+        <p>Three other methods declared the same parameter but never checked it — <code class="inline">cond = encoder(c)</code> ran unconditionally regardless of what <code class="inline">skip_encode</code> was set to: <span class="mono">SDXL.forward()</span> (<span class="fileref">model.py:852-908</span>, used by <span class="mono">segformer_training.py</span>), <span class="mono">SDXL.sample()</span> (<span class="fileref">model.py:953-1007</span>, used by <span class="mono">segformer_inference.py</span>), and <span class="mono">SD15.sample_easy()</span> (<span class="fileref">model.py:717-768</span>, which didn't even declare the parameter until this fix). Harmless for training, where the placeholder encoder is <code class="inline">torch.nn.Identity</code> (a no-op either way) — but genuinely broken for inference, where the real <span class="mono">SegmentationEncoder</span> would have run <i>again</i> on an already-finished, already-colourised conditioning map as if it were a raw photo. All three now match <span class="mono">SD15.forward()</span>'s pattern exactly.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 23 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l23">
+      <div class="lesson-kicker"><span class="lesson-num">23</span><span class="tag">Extending to segmentation</span></div>
+      <h2 class="lesson-title">Two new sampling knobs</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p><b>Decaying the conditioning's grip.</b> Generation is ~50 steps (Lesson 3). Keeping the segmentation map's influence at full strength for <i>every</i> step can make output look flat or paint-by-numbers, once the rough layout is already settled. The fix: hold full strength while the model is still deciding the big picture, then smoothly loosen the grip in later steps so the base model's own texture knowledge can take over.</p>
+        <p><b>Softening hard edges.</b> A segmentation map's class boundaries are pixel-exact — no real photo has that. Feeding the model perfectly crisp boundaries every time risks it learning to render unnaturally crisp, cartoonish edges instead of the soft transitions a camera actually sees.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p>Both live on <span class="mono">ModelBase</span>, so any model subclass gets them for free. <span class="mono">soften_conditioning</span> (<span class="fileref">model.py:356</span>) is a depthwise box blur — verified: a hard 0→1 edge comes out with genuine in-between values near the boundary, and <code class="inline">kernel_size ≤ 1</code> is a true no-op.</p>
+        <p><span class="mono">lora_scale_schedule_callback</span> (<span class="fileref">model.py:376</span>) hooks into diffusers' real <code class="inline">callback_on_step_end</code> mechanism (confirmed its exact calling convention — <code class="inline">callback(pipe, step_index, timestep, callback_kwargs)</code> — by reading the installed <span class="mono">diffusers</span> source directly, not guessing) and reuses the <i>same</i> <code class="inline">.lora_scale</code> attribute <span class="mono">toggle_loras()</span> already flips between train/val (<span class="fileref">utils.py</span>) — just varied smoothly per step instead of once per run:</p>
+        <pre><code>frac = step_index / (num_inference_steps - 1)
+scale = lora_scale_start if frac <= decay_start_frac else <linear interpolation to lora_scale_end>
+for layer in all_patched_lora_layers: layer.lora_scale = scale</code></pre>
+        <p>When <code class="inline">lora_scale_start == lora_scale_end</code>, this returns <code class="inline">None</code> — no callback gets installed at all, so the existing depth pipeline (which never sets these) is provably unaffected.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- LESSON 24 -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="l24">
+      <div class="lesson-kicker"><span class="lesson-num">24</span><span class="tag">Extending to segmentation</span></div>
+      <h2 class="lesson-title">Checked against ground truth</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>A pretrained encoder is only as useful as a conditioning signal if it's actually right most of the time. Before trusting it, compare its predictions against real human-annotated labels — not just "does the code run," but "is the output any good."</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="mono">check_seg_accuracy.py</span> compares <span class="mono">seg_map_calculations.py</span>'s predictions against Cityscapes' own <span class="fileref">data/dataset/extracted/gtFine</span> ground truth. One real subtlety: <span class="mono">gtFine</span>'s <code class="inline">_labelIds.png</code> uses Cityscapes' full 34-class raw id scheme (road=7, sidewalk=8, ...), not the 19-class scheme SegFormer predicts in — comparing them directly would silently compare unrelated numbers. <span class="mono">CITYSCAPES_ID_TO_TRAINID</span> converts using the standard public mapping before scoring, and 255 ("ignore") pixels are excluded.</p>
+        <p><b>Real numbers, run this session:</b> mean mIoU 0.76 on a 20-image train sample (Aachen), 0.66 on a 20-image val sample (Frankfurt) — both against real <span class="mono">gtFine</span> labels, at this project's actual 1280×800 training resolution. Re-running the same val images at Cityscapes' native undistorted 2:1 ratio (1024×512, no aspect squash) gave 0.645 — nearly identical — which rules out the resize convention as the cause of the gap from SegFormer-B5's published ~0.84 Cityscapes benchmark. The remaining gap is best explained by sample size (20 images, 1–2 cities) and a simpler single-shot resize versus the official multi-scale evaluation protocol, not a broken pipeline.</p>
+      </div>
+    </section>
+
+    <section class="lesson" id="l25">
+      <div class="lesson-kicker"><span class="lesson-num">25</span><span class="tag">Extending to segmentation</span></div>
+      <h2 class="lesson-title">Five more bugs, found by actually running it</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Reading code carefully catches a lot, but some bugs only show up when tensors actually flow through the real shapes on real hardware. All five bugs below passed a plain read-through (and, for the first two, a first attempt at fixing them) before a real training step on a GPU exposed them. That's the case for smoke-testing on a small local GPU before ever touching a training cluster: it's cheap, fast failure instead of expensive, slow failure.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><b>1. The mapper's downsampling pyramid didn't match SDXL's UNet.</b> <span class="fileref">src/mapper_network.py</span>'s <span class="mono">FixedStructureMapperXL.down</span> had only one stride-2 conv (÷2 total) before branching into per-depth outputs. The proven SD1.5 version, <span class="mono">FixedStructureMapper15</span>, has three (÷8 total) — matching the VAE's own ÷8 downsample, so its shallowest output lands exactly on the UNet's stage-0 latent resolution. Trimming the block count 4→3 for SDXL's 3-stage UNet was correct; also trimming <span class="mono">self.down</span> from 3 stride-2 convs to 1 was not — that ÷8 is VAE downsampling, independent of how many UNet stages follow. Result: the mapper's conditioning map was 4× too large at every depth, and the very first training step crashed with a tensor-shape mismatch inside <span class="mono">src/lora.py</span>'s <span class="mono">NewStructLoRAConv.forward()</span>. Fixed by restoring the missing two stride-2 convs.</p>
+        <p><b>2. <span class="mono">SDXL.forward()</span> returned the wrong number of values.</b> <span class="mono">ModelBase</span>'s abstract signature (and <span class="mono">SD15.forward()</span>, which works correctly) both promise a 4-tuple: <span class="mono">(model_pred, loss, x0, cond)</span>. <span class="mono">SDXL.forward()</span> only returned 3, dropping <span class="mono">cond</span>. Harmless as long as nothing unpacked the result — but <span class="mono">forward_easy()</span> (used by both <span class="mono">train.py</span> and <span class="mono">segformer_training.py</span>) always unpacks 4, so this crashed immediately after bug #1 was fixed. Fixed by returning <span class="mono">cond</span> (the last LoRA's pre-mapper conditioning tensor, same semantics as SD1.5) as the 4th value.</p>
+        <p><b>3. <span class="mono">max_train_steps</span> never actually stopped training.</b> Both <span class="mono">train.py</span> and the new <span class="mono">segformer_training.py</span> compute <span class="mono">max_train_steps</span> only to size the tqdm progress bar — nothing ever compared <span class="mono">global_step</span> against it to break the loop. A run asked for 3 steps instead silently continued through the entire dataset (20 images, one gradient step each), validating — a full 50-step image generation — after every single one. Fixed in <span class="mono">segformer_training.py</span> by setting the existing <span class="mono">stop_training</span> flag once <span class="mono">global_step >= max_train_steps</span> (reusing the same flag the SIGUSR1 handler sets, so the loop's existing "run validation once more, then break" logic just works). The fix itself then hit a second, smaller bug: assigning to <span class="mono">stop_training</span> inside <span class="mono">main()</span> without <span class="mono">global stop_training</span> made Python treat the name as local for the *entire* function — breaking every earlier read of it too (<code class="inline">UnboundLocalError</code>). One-line fix: add the <span class="mono">global</span> declaration.</p>
+        <p><b>4. SDXL's micro-conditioning metadata was hardcoded to 1024×1024.</b> <span class="mono">SDXL.get_conditioning()</span>'s <span class="mono">compute_time_ids()</span> always told the UNet <span class="mono">original_size = target_size = (1024, 1024)</span>, regardless of the real training resolution. SDXL learns resolution/crop-aware behavior from this signal, so training on 1280×800 while claiming 1024×1024 is a real train/inference mismatch — not a crash, a silent quality cost, arguably worse since nothing would ever point at why. (Sampling was never affected: diffusers' own pipeline <span class="mono">__call__</span> derives this correctly from the real <span class="mono">height</span>/<span class="mono">width</span> kwargs already passed in — only the hand-rolled training path had this hardcoded.) Fixed by threading the actual image size through from <span class="mono">imgs.shape[-2:]</span>.</p>
+        <p><b>5. The training loop's early-stop only broke the inner loop.</b> <span class="mono">if stop_training: break</span> sat inside the batch loop, but not after the outer <span class="mono">for epoch in range(cfg.epochs)</span> loop. With <span class="mono">epochs=1</span> (every run so far) this never mattered — the outer loop only ever ran once anyway. But it's a real latent bug: <span class="mono">epochs > 1</span> combined with an early <span class="mono">max_train_steps</span> stop would silently run one more unwanted training step into the next epoch before actually stopping. Fixed by breaking the outer loop too.</p>
+      </div>
+    </section>
+
+    <section class="lesson" id="l26">
+      <div class="lesson-kicker"><span class="lesson-num">26</span><span class="tag">Extending to segmentation</span></div>
+      <h2 class="lesson-title">A full-dataset proof run: honest results, not a victory lap</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>A local smoke test proves the pipeline doesn't crash. It does not prove the model has learned anything -- those are different claims, and conflating them is how teams end up "sure" about things that aren't actually true. The honest version of a proof run reports what it actually shows, including the parts that are ambiguous or point at more work, not just the parts that look like a win.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><b>The run:</b> 50 real training steps on the full 2975-image Cityscapes set (not the 20-image test slice), batch size 1, validation checkpoints saved as plain PNGs at step 25 and step 50 (<span class="mono">segformer_training.py</span>'s <span class="mono">val_grids/</span> folder -- added this session so results are one file-open away, not buried in a tensorboard server). Loss across all 50 steps stayed numerically stable (no NaN, no explosion) but stayed noisy throughout (bounced between ~0.003 and ~0.33) -- expected, not concerning, for batch size 1 with a random denoising timestep sampled every step; single-sample loss variance is dominated by which timestep got picked, not by whether learning is happening.</p>
+        <p><b>The honest finding:</b> step 25 and step 50 used the identical seg map and the identical fixed seed -- a genuine controlled A/B, since only the LoRA weights differ between them. Step 25's output was a coherent, colourful street photo with plausible structural alignment. Step 50's output shifted to a sepia/vintage photograph tone with visible watermark-like caption text at the bottom -- a real, unexpected change, not something to gloss over. Loss didn't spike at that point, so this isn't training divergence in the numerical sense; the likelier explanation is SDXL's own base model drifting toward one of its learned "vintage stock photo" style basins as the still-noisy LoRA weights shift the conditioning -- base SDXL was trained on a huge, uncurated web dataset that includes plenty of watermarked archival photos, a well-known base-model quirk. This does <em>not</em> establish whether segmentation-conditioning itself is improving or not: that needs averaging over several seg maps, not one seed on one image.</p>
+        <p><b>A second real bug, found by testing the fix.</b> To test whether a negative prompt suppresses the watermark artifact, running <span class="mono">segformer_inference.py</span> against the step-50 checkpoint (offline, <span class="mono">local_files_only=true</span>) hit an immediate crash: <span class="mono">cfg.model.vae_path</span> defaults to the hub id string <span class="mono">"madebyollin/sdxl-vae-fp16-fix"</span>, and the offline-path-resolution block naively did <span class="mono">os.path.join(_root, cfg.model.vae_path)</span> -- joining the repo root with a hub id, not a real local folder, producing a path that obviously doesn't exist. This is the same category of gap already fixed in <span class="mono">segformer_training.py</span> (Lesson 25) -- it just hadn't been hit yet because inference had never actually been run this session. Fixed the same way: a dedicated <span class="mono">vae_local_path</span> key in <span class="fileref">configs/inference_seg.yaml</span> pointing at the real <span class="mono">checkpoints/local_models/sdxl-vae-fp16-fix</span> folder, resolved instead of the hub-id string when <span class="mono">local_files_only=true</span>.</p>
+        <p><b>A third, once the second was fixed: <code class="inline">guidance_scale</code> collided with itself.</b> <span class="mono">segformer_inference.py</span> explicitly passes <span class="mono">guidance_scale=cfg.inference.get("guidance_scale", 7.5)</span> into <span class="mono">model.sample()</span> so that config knob actually does something -- but <span class="mono">SDXL.sample()</span> also hardcoded <span class="mono">guidance_scale=self.guidance_scale</span> (the model's own fixed instance attribute) in its final call to the underlying diffusers pipeline, <em>while separately forwarding <span class="mono">**kwargs</span></em> -- which still contained the caller's <span class="mono">guidance_scale</span>. Python: <code class="inline">got multiple values for keyword argument 'guidance_scale'</code>. This exact call path -- <span class="mono">segformer_inference.py</span> calling <span class="mono">SDXL.sample()</span> -- had never actually executed before tonight; <span class="mono">segformer_training.py</span>'s validation calls never hit it because they don't pass <span class="mono">guidance_scale</span> explicitly. Fixed by resolving one <span class="mono">guidance_scale</span> value up front (caller's, if given, else the model's default) and using it consistently for <em>both</em> the per-LoRA CFG-doubling decision <em>and</em> the final pipe call -- not just silencing the crash, since those two needing to agree is the actual point of the variable.</p>
+        <p><b>A fourth: the checkpoint itself is internally dtype-inconsistent.</b> With #2 and #3 fixed, inference crashed a third time, this time deep inside <em>stock diffusers code</em> (<span class="mono">UNet2DConditionModel.forward → TimestepEmbedding → linear_1</span>) with <code class="inline">RuntimeError: mat1 and mat2 must have the same dtype, but got Half and Float</code>. Checked the actual downloaded files directly (<span class="mono">safetensors</span>' <span class="mono">get_slice(...).get_dtype()</span>, not a guess): <span class="fileref">checkpoints/local_models/stable-diffusion-xl-base-1.0</span>'s UNet and VAE are <span class="mono">F32</span>, but <em>both text encoders are F16</em> -- <span class="mono">stabilityai/stable-diffusion-xl-base-1.0</span>'s default (non-"fp16"-variant) files ship that way, and <span class="mono">download_models.py</span> never requested an explicit <span class="mono">torch_dtype</span>, so each component kept whatever precision its own file happened to be saved at. Training's <span class="mono">forward()</span> never hit this because it builds every tensor itself, always at a consistent dtype; <span class="mono">sample()</span>'s call into the stock pipeline infers a working dtype from the (fp16) text embeddings and casts latents to match, feeding fp16 latents into the fp32 UNet. Fixed at the root in <span class="mono">ModelBase.__init__</span> (<span class="fileref">src/model.py</span>): <span class="mono">self.pipe.to(dtype=torch.float32)</span> right after the pipeline loads, so every model instance -- training or inference -- starts from one consistent dtype regardless of what a given checkpoint happens to ship as.</p>
+        <p><b>A fifth, once the fourth was fixed: a missing <code class="inline">height</code>/<code class="inline">width</code> on the second of two near-identical calls.</b> The "RAW SEG GEN" (empty-prompt) panel's <span class="mono">model.sample()</span> call was missing the same explicit <span class="mono">height=size_h, width=size_w</span> the first call has -- so it silently fell back to SDXL's default square size while the conditioning tensor stayed built for the real 1280x800 shape, crashing inside <span class="mono">NewStructLoRAConv.forward()</span> with the same kind of shape-mismatch error as bug #1, just different numbers. Copy-paste-adjacent code with one path exercised and the other not is exactly where this kind of thing hides. Fixed by matching the first call.</p>
+        <p>Five real bugs in one investigation, each only reachable by fixing the one before it and actually running the result. None of them were visible from reading the code in isolation. This is the argument for the smoke-test discipline this whole extension was built on: run it for real, on real hardware, before trusting it.</p>
+      </div>
+    </section>
+
+    <section class="lesson" id="l27">
+      <div class="lesson-kicker"><span class="lesson-num">27</span><span class="tag">Extending to segmentation</span></div>
+      <h2 class="lesson-title">The negative prompt worked. The controllability check didn't lie.</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>A generated image that "looks good" is not the same claim as "the model learned to follow the conditioning signal." A strong base model plus a descriptive text prompt can produce a perfectly plausible street photo with zero contribution from the LoRA at all. The only way to tell these apart is to remove the crutch -- generate with <em>no</em> text prompt, structure only -- and to score against the actual target, not against how convincing the image looks to a human skimming it.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p>Re-running the negative-prompt test (checkpoint-50, same seg map, same seed) after fixing bug #5: the watermark/sepia artifact from Lesson 26 is gone -- the "PREDICTED" panel (real prompt + negative prompt) is a clean, coherent evening street scene. That looked like a genuine win. It wasn't the whole story.</p>
+        <p>The 4th panel, "RAW SEG GEN" -- same seg map, empty text prompt, pure segmentation adherence by design -- rendered an almost completely unrelated monochrome sketch of trees and a building, nothing resembling the road/car/sidewalk layout the seg map actually specifies. <span class="mono">compute_miou</span> (comparing SegFormer's own re-segmentation of the generated image against the original conditioning map) came back at <b>0.0929</b> -- far below the 0.76/0.66 accuracy numbers from Lesson 24, though that's not a contradiction: those numbers measured "is SegFormer's own prediction correct against ground truth," this one measures "did the trained LoRA make the UNet draw what the map says," a different and much harder claim after only 50 gradient steps.</p>
+        <p>Put together: the "good-looking" PREDICTED panel is most likely riding on the text prompt's own descriptive power ("a photo of a city street in frankfurt"), not on learned segmentation control. That's the expected, honest state of a LoRA whose <span class="mono">B</span> matrix started at exactly zero 50 steps ago -- not a failure, but real evidence that this checkpoint is not yet "sure" territory. A longer run, checked the same rigorous way (empty-prompt panel + mIoU, not just eyeballing the main panel), is what turns "looks plausible" into "verified."</p>
+      </div>
+    </section>
+
+    <section class="lesson" id="l28">
+      <div class="lesson-kicker"><span class="lesson-num">28</span><span class="tag">Verification</span></div>
+      <h2 class="lesson-title">A full re-run, and a dormant bug found by testing the sibling branch</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Two ideas from earlier lessons combined into one real finding this session. Lesson 25's whole argument is that some bugs only show up by actually running the code, not by re-reading it. Separately, this project's decision log has always said a bug in <em>shared</em> code shows up on whichever branch's data happens to exercise it first, and can sit dormant on the other branch indefinitely. Both turned out true again here -- just via an unusual route: the bug was found on the <em>grounded_sam</em> branch, in a file that only <em>looks like</em> shared code (each branch keeps its own copy of the inference script), but shares the exact same bug shape as this branch's copy.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><b>Config through instantiation, real, not assumed:</b> <span class="mono">hydra.compose(config_name="train", overrides=["experiment=train_seg"])</span> still resolves cleanly; <span class="mono">hydra.utils.instantiate()</span> on the mapper still produces exactly 1,222,048 parameters, unchanged from Lesson 18's number despite every config rewrite since. <b>Then a real 3-step training run</b> (<span class="mono">segformer_training.py experiment=train_seg data.batch_size=1</span>, this session's own dev GPU) against the real precomputed 20-image dev set -- loss moved 0.263 &#8594; 0.229 &#8594; 0.00508, a validation pass ran and saved a real PNG, and a real checkpoint landed on disk. <b>Then real inference off that checkpoint</b> -- generated an image, scored mIoU against the input map: 0.0580, near-random as expected from 3 steps, a second data point consistent with Lesson 27's 0.0929 finding at 50 steps -- both numbers say "undertrained," neither says "broken."</p>
+        <p><b>The dormant bug:</b> <span class="mono">segformer_inference.py</span>'s own <span class="mono">_load_seg_map()</span> calls <span class="mono">seg_colorize_ids(ids, palette)</span> with no bounds check on <span class="mono">ids</span> -- a raw <span class="mono">palette[ids]</span> lookup, same shape as the bug Lesson 24 already found and fixed in <span class="fileref">src/data/local_seg.py</span>'s training-side loader. It never crashes on this branch's own data, because SegFormer's dense classifier always predicts one of its 19 real classes -- IGNORE_ID (255) never appears in a map this branch produces. It is not hypothetical, though: the grounded_sam branch's own copy of this exact function has the identical unguarded lookup, and DID crash for real (CUDA device-side assert, index out of bounds) the moment inference ran against one of <em>that</em> branch's own precomputed maps, which legitimately contain IGNORE_ID pixels for any region no detection touched. Ported the same guard here -- mask ids &#8805; palette size to 0 before the lookup, paint those pixels black after -- as a preventive fix, verified directly against a real segformer seg map (correct shape, value range still exactly [0,1], no crash) rather than assumed safe from the reasoning alone.</p>
+        <p>The practical lesson: "this branch's data can't trigger this" is true today and was never actually false -- but it's also not a reason to leave the same unguarded pattern sitting in a second copy of the same function, when the sibling branch already paid the cost of finding out what happens when the assumption doesn't hold.</p>
+      </div>
+    </section>
+
+    <section class="lesson" id="l29">
+      <div class="lesson-kicker"><span class="lesson-num">29</span><span class="tag">Extending to segmentation</span></div>
+      <h2 class="lesson-title">Colorizing class IDs to RGB was a shortcut, not a design choice</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Segmentation classes are categorical, not continuous. Feeding a palette-colorized RGB image through a normal conv stem (<span class="mono">FixedStructureMapperXL</span>, unchanged from the original repo's depth-conditioning mapper) forces the network to re-derive "this shade of blue means sky" from raw pixel values -- and two classes assigned nearby palette colors become harder to tell apart than they should be, an unforced information bottleneck. The standard approach for semantic-image-synthesis (SPADE, OASIS, and most segmentation-to-image diffusion work) is a learned embedding table: each class gets its own vector directly, no color round-trip. That's also exactly what <span class="mono">NewStructLoRAConv</span>'s gamma/beta FiLM modulation is built to consume.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><b>What changed:</b> a new <span class="mono">SegIDStructureMapperXL</span> (<span class="fileref">src/mapper_network.py</span>) replaces <span class="mono">FixedStructureMapperXL</span> as this branch's default mapper. It takes the raw class-id map directly (Long <span class="mono">[B,H,W]</span>) through an <span class="mono">nn.Embedding</span> stem plus a cheap derived boundary channel (min/max-pool trick, no extra data needed), instead of colorizing to RGB first and running a 3-channel conv stem over it. Mirrors <span class="mono">mask2former</span> branch's own <span class="mono">SegStructureMapperXL</span>, which used this approach from the start -- this branch (and grounded_sam) are catching up to it, not inventing something new.</p>
+        <p><b>The one subtlety that would have been a silent bug:</b> <span class="mono">src/model.py</span>'s CFG dropout zeroes a whole sample's conditioning tensor directly -- <span class="mono">c[dropout_mask] = 0</span> -- before the mapper ever runs. For a colorized RGB tensor, zero is a legitimate color (black) and already meant "no signal." For a raw class-id tensor, zero is <em>also a real class id</em> (id 0 = "road" in this branch's scheme) -- so without a fix, CFG dropout would have silently told the model "this pixel is road" instead of "no conditioning here," for every dropped sample. Fixed by reserving id 0 as NULL: the dataset loader shifts real ids 0..18 to 1..19 at load time, and <span class="mono">nn.Embedding(..., padding_idx=0)</span> makes that row a true, always-zero vector -- so the existing dropout code keeps meaning exactly what it always meant, with no change needed there.</p>
+        <p><b>What did NOT need to change:</b> <span class="mono">seg_map_calculations.py</span> was already saving raw class-id PNGs, not colorized ones -- colorization only ever happened at dataset-load time. So the precompute pipeline needed zero changes; only the dataset loader (<span class="fileref">src/data/local_seg.py</span>, new <span class="mono">conditioning: "classid"|"rgb"</span> switch, default <span class="mono">classid</span>) and <span class="fileref">segformer_inference.py</span>'s conditioning path (kept the colorized version around separately, for the display grid panel only) needed updates.</p>
+        <p><b>Verified, not just written:</b> a real 8-step training run (batch_size=1, 1280x800, the real 20-image dev slice) completed with no crash -- loss stayed numerically sane (0.24 &#8594; 0.149 &#8594; 0.0056 &#8594; ... &#8594; 0.0024, noisy but no NaN), a validation pass ran, and real checkpoints (<span class="mono">lora-checkpoint.pt</span>, <span class="mono">mapper-checkpoint.pt</span>) plus real generated grid images landed on disk at <span class="fileref">outputs/train/seg/runs/2026-08-25/07-02-19/</span>. This confirms the mechanism is wired correctly end to end -- embedding lookup, boundary derivation, and the CFG-dropout-to-NULL-id interaction all behaved as designed. It does not yet say anything about generation quality: 8 steps is a wiring check, not a convergence claim.</p>
+      </div>
+    </section>
+
+    <section class="lesson" id="l30">
+      <div class="lesson-kicker"><span class="lesson-num">30</span><span class="tag">Extending to segmentation</span></div>
+      <h2 class="lesson-title">One prompt for 150 images is barely a prompt at all</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>A text prompt only teaches the model something if it varies with what's actually in the image. A prompt that's identical across ~150 images (one per Cityscapes city) carries almost no information the model can learn from -- it's closer to a constant bias than real supervision. This repo's own config comments already called this out: <span class="mono">configs/experiment/train_seg.yaml</span> flags that "a vague prompt lets the base model's own prior dominate the structure signal," a real risk for a project whose entire point is measuring how well the LoRA follows the STRUCTURE signal.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="fileref">enrich_prompts.py</span> (new) walks a folder for every <span class="mono">*.jsonl</span> manifest, runs a local BLIP captioning model over each referenced image, and replaces the generic template with a real per-image caption. This doesn't fight the segmentation-conditioning goal: BLIP describes scene CONTENT ("cars driving down a street in front of a tall building"), not precise spatial layout -- the text encoder gets something real to key off, while the segmentation map stays the only signal carrying WHERE things are. Reversible by construction: a one-time <span class="mono">.bak</span> copy per file before the first write, plus a <span class="mono">prompt_original</span> field kept on every entry, so nothing is silently lost even without opening the backup.</p>
+        <p><b>Verified, not just written:</b> ran for real against this branch's own dev manifest -- 6/6 entries enriched, each getting a genuinely distinct caption instead of the shared template, confirmed both via a live first-time download and again fully offline against the local <span class="fileref">checkpoints/local_models/blip-image-captioning-large</span> copy. Sample: <span class="mono">"a photo of a city street in aachen"</span> &#8594; <span class="mono">"cars driving down a street in front of a tall building"</span>.</p>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- GLOSSARY -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="glossary">
+      <div class="lesson-kicker"><span class="tag">Quick reference</span></div>
+      <h2 class="lesson-title">Glossary</h2>
+      <div style="overflow-x:auto;">
+      <table class="glossary">
+        <thead><tr><th>Term</th><th>Plain-English meaning</th><th>Lives here</th></tr></thead>
+        <tbody>
+          <tr><td class="term">Latent</td><td>The VAE's compressed, still-spatial grid that diffusion actually operates on (64×64×4, not 512×512×3).</td><td class="where mono">vae.encode(...)</td></tr>
+          <tr><td class="term">UNet</td><td>The network that guesses "what noise was just added" — the only network LoRAdapter modifies.</td><td class="where mono">self.unet</td></tr>
+          <tr><td class="term">Depth (layer)</td><td>Which of the UNet's 4 resolution stages a layer belongs to (0 = 64×64 … 3 = 8×8 bottleneck).</td><td class="where mono">model.py:255</td></tr>
+          <tr><td class="term">LoRA</td><td>Freeze a big weight, add a small trainable parallel path (A↓ then B↑) beside it.</td><td class="where mono">src/lora.py</td></tr>
+          <tr><td class="term">FiLM</td><td>Scale-and-shift a layer's activation using numbers computed from a conditioning signal.</td><td class="where mono">gamma / beta</td></tr>
+          <tr><td class="term">Conditional LoRA</td><td>LoRA whose low-rank path gets FiLM-modulated by a conditioning map instead of being static.</td><td class="where mono">NewStructLoRAConv</td></tr>
+          <tr><td class="term">Depth map</td><td>Per-pixel "how far away," extracted live by frozen MiDaS from the same image being trained on.</td><td class="where mono">annotators/midas.py</td></tr>
+          <tr><td class="term">Mapper</td><td>Trainable CNN: one conditioning map → 4 tensors, one per UNet resolution stage.</td><td class="where mono">FixedStructureMapper15</td></tr>
+          <tr><td class="term">DataProvider</td><td>The mailbox holding this step's 4 mapped tensors so every patched layer can read its own.</td><td class="where mono">utils.py:18</td></tr>
+          <tr><td class="term">adaption_mode</td><td>Config knob deciding which UNet layers get replaced with a LoRA class.</td><td class="where mono">struct.yaml</td></tr>
+          <tr><td class="term">Cross-attention</td><td>The mechanism letting image features "read" the text prompt; targets <span class="mono">to_k</span>/<span class="mono">to_v</span>.</td><td class="where mono">style.yaml</td></tr>
+          <tr><td class="term">c_dropout / CFG</td><td>Randomly zeroing the prompt or conditioning during training so guidance-scale steering works at generation.</td><td class="where mono">model.py:60</td></tr>
+          <tr><td class="term">Hydra</td><td>Config library: many small yaml files → one merged tree → real Python objects via instantiate.</td><td class="where mono">configs/</td></tr>
+          <tr><td class="term">skip_encode</td><td>Feed a conditioning tensor straight to the mapper, bypassing the live encoder — used for precomputed maps.</td><td class="where mono">model.py:528</td></tr>
+          <tr><td class="term">Precomputed map</td><td>Segmentation's conditioning strategy: run the encoder once offline per image, load the result at train time — vs. depth's live, every-step run.</td><td class="where mono">local_seg.py</td></tr>
+          <tr><td class="term">mIoU</td><td>Mean intersection-over-union: per-class overlap between a prediction and ground truth, averaged over classes present in either.</td><td class="where mono">utils.py</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- FURTHER STUDY -->
+    <!-- ============================================================ -->
+    <section class="lesson" id="study" style="border-bottom:none;">
+      <div class="lesson-kicker"><span class="tag">Where to go next</span></div>
+      <h2 class="lesson-title">Further study</h2>
+      <div class="honest">
+        No YouTube video exists for this specific paper or repo. It's a small ECCV paper, not the kind of thing that gets a general-audience explainer. Nothing below is a substitute for reading Section 3 of the paper next to <span class="mono">src/lora.py</span> — that pairing is your strongest source.
+      </div>
+      <ul class="studylist">
+        <li><span class="st-title">Paper — Section 3, "Method"</span><div class="st-why">The equations behind Fig. 3 above, written formally. <a href="https://arxiv.org/pdf/2405.07913">arxiv.org/pdf/2405.07913</a></div></li>
+        <li><span class="st-title">Project page — qualitative results</span><div class="st-why">See what "good" structure/style conditioning output looks like before judging your own. <a href="https://compvis.github.io/LoRAdapter/">compvis.github.io/LoRAdapter</a></div></li>
+        <li><span class="st-title">How AI Image Generators Work — Computerphile</span><div class="st-why">Lessons 1–3 intuition, from a reputable explainer channel. <a href="https://www.youtube.com/watch?v=1CIpzeNxIhU">youtube.com/watch?v=1CIpzeNxIhU</a></div></li>
+        <li><span class="st-title">U-Net Part 1: What is U-Net? — DigitalSreeni</span><div class="st-why">Lesson 4's shape, drawn out slowly. <a href="https://www.youtube.com/watch?v=azM57JuQpQI">youtube.com/watch?v=azM57JuQpQI</a></div></li>
+        <li><span class="st-title">Attention in transformers, visually explained — 3Blue1Brown</span><div class="st-why">Lesson 5's cross-attention, the gold-standard visual treatment. <a href="https://www.youtube.com/watch?v=eMlx5fFNoYc">youtube.com/watch?v=eMlx5fFNoYc</a></div></li>
+        <li><span class="st-title">What is LoRA — explained by the inventor</span><div class="st-why">Lesson 6's frozen-W-plus-A/B idea, from a primary source. <a href="https://www.youtube.com/watch?v=DhRoTONcyZE">youtube.com/watch?v=DhRoTONcyZE</a></div></li>
+        <li><span class="st-title">Hydra docs — config groups &amp; defaults</span><div class="st-why">Lesson 14's mechanics, from the source. <a href="https://hydra.cc/docs/intro/">hydra.cc/docs/intro</a></div></li>
+      </ul>
+    </section>
+
+    <footer class="end">
+      Every code excerpt, line number, and config value above was read directly from this repo on disk this session — no other branch, fork, or earlier conversation assumed. Lessons 1–18 cover the base repo's depth path; Lessons 19–24 are this session's own segmentation extension (branch <span class="mono">segformer</span>), including a real accuracy check run against Cityscapes ground truth on local hardware. This guide gets updated as that work progresses, not written once and left behind.
+    </footer>
+  </main>
+</div>
