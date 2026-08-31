@@ -104,6 +104,7 @@ class LoRAConv(nn.Module):
         depth: int,
         data_provider: DataProvider,
         lora_scale: float = 1.0,
+        bias: bool = True,
         *args,
         **kwargs,
     ):
@@ -112,7 +113,11 @@ class LoRAConv(nn.Module):
         self.lora_scale = lora_scale
         self.data_provider = data_provider
 
-        self.W = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding)
+        # bias mirrors the original target conv's own bias -- W is a frozen
+        # exact copy of it, so allocating a bias term it doesn't have would
+        # add a permanent random offset (nn.Conv2d's default bias init) that
+        # the real base model never had
+        self.W = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, bias=bias)
         for p in self.W.parameters():
             p.requires_grad_(False)
 
@@ -153,6 +158,7 @@ class NewStructLoRAConv(nn.Module):
         depth: int,
         data_provider: DataProvider,
         lora_scale: float = 1.0,
+        bias: bool = True,
     ):
         super().__init__()
 
@@ -161,7 +167,11 @@ class NewStructLoRAConv(nn.Module):
 
         self.data_provider = data_provider
 
-        self.W = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding)
+        # bias mirrors the original target conv's own bias -- W is a frozen
+        # exact copy of it, so allocating a bias term it doesn't have would
+        # add a permanent random offset (nn.Conv2d's default bias init) that
+        # the real base model never had
+        self.W = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, bias=bias)
         for p in self.W.parameters():
             p.requires_grad_(False)
 

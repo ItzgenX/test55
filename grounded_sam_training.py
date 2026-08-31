@@ -336,7 +336,14 @@ def _grounded_sam_validation_loss(
     for m in model.mappers:
         m.train()
     for e in model.encoders:
-        e.train()
+        # skip encoders with zero trainable params (e.g. GroundedSamEncoder,
+        # which self-freezes AND self-evals its DINO/SAM weights at
+        # construction) -- .train() doesn't touch requires_grad, but it does
+        # re-enable Dropout and let BatchNorm/LayerNorm running stats drift
+        # away from their pretrained calibration, degrading zero-shot
+        # detection/segmentation quality as training progresses
+        if any(p.requires_grad for p in e.parameters()):
+            e.train()
 
     torch.set_rng_state(cpu_rng)
     if cuda_rng is not None:
@@ -603,8 +610,12 @@ def main(cfg):
             unet.train()
             for m in mappers:
                 m.train()
-            for e in encoders:
-                e.train()
+            for enc in encoders:
+                # see _grounded_sam_validation_loss: skip encoders with no
+                # trainable params so a self-frozen zero-shot annotator
+                # (e.g. GroundedSamEncoder) stays in eval mode
+                if any(p.requires_grad for p in enc.parameters()):
+                    enc.train()
 
     def do_grounded_sam_validation(label, epoch_num, epoch_frac):
         """VALIDATION ONLY -- the CHEAP half, run every val_steps: compute
@@ -647,8 +658,12 @@ def main(cfg):
         unet.train()
         for m in mappers:
             m.train()
-        for e in encoders:
-            e.train()
+        for enc in encoders:
+            # see _grounded_sam_validation_loss: skip encoders with no
+            # trainable params so a self-frozen zero-shot annotator
+            # (e.g. GroundedSamEncoder) stays in eval mode
+            if any(p.requires_grad for p in enc.parameters()):
+                enc.train()
 
         for step, batch in enumerate(train_dataloader):
             _grad_norm = None

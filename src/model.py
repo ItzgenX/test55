@@ -303,6 +303,7 @@ class ModelBase(ABC, nn.Module):
                     lora.W_IP.load_state_dict({path.split(".")[-1]: w})
 
             if "conv" in path:
+                has_bias = target_module.bias is not None
                 lora = getattr(loras, lora_cls)(
                     in_channels=target_module.in_channels,
                     out_channels=target_module.out_channels,
@@ -311,21 +312,25 @@ class ModelBase(ABC, nn.Module):
                     padding=target_module.padding,
                     data_provider=data_provider,
                     depth=depth,
+                    bias=has_bias,
                     **class_config,
                 )
 
-                # find bias term -- LoRAConv/NewStructLoRAConv always allocate
-                # W with bias=True, so a base conv without a bias entry would
-                # otherwise raise a bare, confusing KeyError on the lookup below
-                bias_path = ".".join(path.split(".")[:-1] + ["bias"])
-                if bias_path not in sd:
-                    raise ValueError(
-                        f"Conv layer '{path}' has no matching bias entry '{bias_path}' in the "
-                        f"state dict (target module bias={target_module.bias}), but LoRAConv/"
-                        f"NewStructLoRAConv always require one to load."
-                    )
-                b = sd[bias_path]
-                lora.W.load_state_dict({path.split(".")[-1]: w, "bias": b})
+                # W mirrors the original conv exactly, bias included -- only
+                # look up/load a bias term when the original actually has one
+                # (has_bias above already made W biasless otherwise, so there
+                # is nothing to load and no state-dict key to expect)
+                if has_bias:
+                    bias_path = ".".join(path.split(".")[:-1] + ["bias"])
+                    if bias_path not in sd:
+                        raise ValueError(
+                            f"Conv layer '{path}' has bias=True but no matching bias entry "
+                            f"'{bias_path}' was found in the state dict -- state dict may not "
+                            f"match this UNet's actual architecture."
+                        )
+                    lora.W.load_state_dict({path.split(".")[-1]: w, "bias": sd[bias_path]})
+                else:
+                    lora.W.load_state_dict({path.split(".")[-1]: w})
 
             if lora is None:
                 raise ValueError(f"Unknown module {path}")
