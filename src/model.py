@@ -145,10 +145,10 @@ class ModelBase(ABC, nn.Module):
         self.unet.requires_grad_(False)
 
         self.vae = self.pipe.vae
+        self.vae.requires_grad_(False)
         self.text_encoder = self.pipe.text_encoder
         self.tokenizer = self.pipe.tokenizer
 
-        self.vae = self.pipe.vae
         self.text_encoder.requires_grad_(False)
 
         # handle sdxl case
@@ -314,8 +314,16 @@ class ModelBase(ABC, nn.Module):
                     **class_config,
                 )
 
-                # find bias term
+                # find bias term -- LoRAConv/NewStructLoRAConv always allocate
+                # W with bias=True, so a base conv without a bias entry would
+                # otherwise raise a bare, confusing KeyError on the lookup below
                 bias_path = ".".join(path.split(".")[:-1] + ["bias"])
+                if bias_path not in sd:
+                    raise ValueError(
+                        f"Conv layer '{path}' has no matching bias entry '{bias_path}' in the "
+                        f"state dict (target module bias={target_module.bias}), but LoRAConv/"
+                        f"NewStructLoRAConv always require one to load."
+                    )
                 b = sd[bias_path]
                 lora.W.load_state_dict({path.split(".")[-1]: w, "bias": b})
 
@@ -866,15 +874,23 @@ class SDXL(ModelBase):
         if do_cfg:
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
             add_text_embeds = torch.cat([negative_pooled_prompt_embeds, pooled_prompt_embeds], dim=0)
-            add_time_ids = torch.cat([negative_add_time_ids, add_time_ids], dim=0)
+            # repeat each half to bsz rows *before* concatenating, so the row
+            # order (all-negative rows, then all-positive rows) matches
+            # prompt_embeds/add_text_embeds above -- repeating the
+            # pre-concatenated [2, 6] tensor instead would tile it as
+            # [neg,pos,neg,pos,...], misaligning every row against its
+            # prompt/pooled-embed counterpart for any bsz > 1.
+            add_time_ids = torch.cat(
+                [negative_add_time_ids.repeat(bsz, 1), add_time_ids.repeat(bsz, 1)], dim=0
+            )
         else:
             # prompt_embeds = prompt_embeds
             add_text_embeds = pooled_prompt_embeds
-            # add_time_ids = add_time_ids.repeat
+            add_time_ids = add_time_ids.repeat(bsz, 1)
 
         prompt_embeds = prompt_embeds.to(device)
         add_text_embeds = add_text_embeds.to(device)
-        add_time_ids = add_time_ids.to(device).repeat(bsz, 1)
+        add_time_ids = add_time_ids.to(device)
 
         return {
             "prompt_embeds": prompt_embeds,
@@ -893,7 +909,7 @@ class SDXL(ModelBase):
         cfg_mask: list[bool] | None = None,
         skip_encode: bool = False,
         batch: dict | None = None,
-    ) -> Union[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         assert len(imgs.shape) == 4
         assert imgs.min() >= -1.0
         assert imgs.max() <= 1.0
@@ -934,9 +950,44 @@ class SDXL(ModelBase):
         # Add noise to the latents according to the noise magnitude at each timestep
         # (this is the forward diffusion process)
         noisy_latents = self.noise_scheduler.add_noise(latents, noise, timesteps)
+        encoders = self.encoders
+        mappers = self.mappers
+
+        # controlnet related stuff is always at index 0 -- must be sliced off
+        # before the main lora loop below, matching SD15.forward(); this class
+        # previously zipped self.encoders/self.mappers/cs against self.dps
+        # directly, which never has a controlnet entry, silently misaligning
+        # every real lora's (encoder, mapper, cs) against the wrong self.dps
+        # slot whenever use_controlnet=True, and never actually running the
+        # controlnet forward pass at all.
+        additional_inputs = {}
+        if self.use_controlnet:
+            cn_input = cs[0]
+            cs = cs[1:]
+
+            controlnet = mappers[0]
+            mappers = mappers[1:]
+
+            annotator = encoders[0]
+            encoders = encoders[1:]
+
+            with torch.no_grad():
+                cn_cond = annotator(cn_input)
+
+            down_block_res_samples, mid_block_res_sample = controlnet(
+                noisy_latents,
+                timesteps,
+                encoder_hidden_states=prompt_embeds_input,
+                controlnet_cond=cn_cond,
+                conditioning_scale=1.0,
+                return_dict=False,
+            )
+
+            additional_inputs["down_block_additional_residuals"] = down_block_res_samples
+            additional_inputs["mid_block_additional_residual"] = mid_block_res_sample
 
         # add our lora conditioning
-        for i, (encoder, dp, mapper, c) in enumerate(zip(self.encoders, self.dps, self.mappers, cs)):
+        for i, (encoder, dp, mapper, c) in enumerate(zip(encoders, self.dps, mappers, cs)):
             if cfg_mask is None or cfg_mask[i]:
                 dropout_mask = torch.rand(bsz, device=c.device) < self.c_dropout
 
@@ -964,6 +1015,7 @@ class SDXL(ModelBase):
             timesteps,
             prompt_embeds_input,
             added_cond_kwargs=unet_added_conditions,
+            **additional_inputs,
         ).sample
 
         # get the x0 prediction in ddpm sampling
@@ -1040,9 +1092,29 @@ class SDXL(ModelBase):
         if callback is not None:
             kwargs["callback_on_step_end"] = callback
 
+        mappers = self.mappers
+        encoders = self.encoders
+        if self.use_controlnet:
+            # controlnet related stuff is always at index 0 -- must be sliced
+            # off before the main lora loop below, matching SD15.sample_easy();
+            # this method previously zipped self.encoders/self.mappers/cs
+            # against self.dps directly, which never has a controlnet entry.
+            cn_input = cs[0]
+            cs = cs[1:]
+
+            mappers = mappers[1:]
+
+            annotator = encoders[0]
+            encoders = encoders[1:]
+
+            with torch.no_grad():
+                cn_cond = annotator(cn_input)
+
+            kwargs["image"] = cn_cond
+
         # we have to do two separate forward passes for the cfg with the loras
         # add our lora conditioning
-        for i, (encoder, dp, mapper, c) in enumerate(zip(self.encoders, self.dps, self.mappers, cs)):
+        for i, (encoder, dp, mapper, c) in enumerate(zip(encoders, self.dps, mappers, cs)):
 
             if c.shape[0] != batch_size:
                 assert c.shape[0] == 1
