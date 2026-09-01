@@ -25,7 +25,7 @@ n_samples: 4
 
 tag: ''
 
-local_files_only: false
+local_files_only: true
 
 hydra:
   run:
