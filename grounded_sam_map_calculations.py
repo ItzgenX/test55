@@ -549,6 +549,16 @@ def main():
     p.add_argument("--limit_test", type=int, default=None, help="cap on test images")
     p.add_argument("--no_skip_existing", action="store_true")
     p.add_argument("--local_files_only", type=lambda s: s.lower() != "false", default=True)
+    p.add_argument("--dino_model_path", default="checkpoints/local_models/grounding-dino-tiny",
+                    help="Local folder for Grounding DINO -- only read when --local_files_only "
+                         "(default). Same convention as configs/experiment/train_grounded_sam*.yaml's "
+                         "dino_model_path.")
+    p.add_argument("--dino_model_name", default="IDEA-Research/grounding-dino-tiny",
+                    help="HF Hub id, only used when --local_files_only=false.")
+    p.add_argument("--sam_model_path", default="checkpoints/local_models/sam-vit-base",
+                    help="Local folder for SAM -- only read when --local_files_only (default).")
+    p.add_argument("--sam_model_name", default="facebook/sam-vit-base",
+                    help="HF Hub id, only used when --local_files_only=false.")
     p.add_argument("--device", default=None, help="e.g. 'cpu' to force CPU (auto-detects GPU if omitted). "
                                                     "On a multi-GPU node, pin per-task via CUDA_VISIBLE_DEVICES "
                                                     "in your sbatch script rather than this flag.")
@@ -633,8 +643,31 @@ def main():
     logger.info(f"  Output      : {output_root}")
     logger.info("=" * 60)
 
+    # ── Pick LOCAL model folders vs HUB ids from the local_files_only flag ──
+    # Exact same pattern as grounded_sam_training.py/grounded_sam_inference.py:
+    # local_files_only=True alone does NOT redirect where a model loads from,
+    # it only blocks network fallback. GroundedSamEncoder's own dino_model/
+    # sam_model defaults are HF Hub repo ids ("IDEA-Research/grounding-dino-
+    # tiny", "facebook/sam-vit-base") -- passing local_files_only=True with
+    # THOSE ids still resolves against the default ~/.cache/huggingface/hub/
+    # cache-by-repo-id layout, never checkpoints/local_models/, so a fully
+    # offline node with nothing in that default cache fails outright. Local
+    # paths are made absolute from PROJECT_ROOT (this script's own
+    # non-Hydra equivalent of training/inference's _root = get_original_cwd())
+    # so this still works no matter what directory it's launched from.
+    if args.local_files_only:
+        os.environ["HF_HUB_OFFLINE"]      = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        dino_model = str(PROJECT_ROOT / args.dino_model_path)
+        sam_model  = str(PROJECT_ROOT / args.sam_model_path)
+    else:
+        dino_model = args.dino_model_name
+        sam_model  = args.sam_model_name
+
     encoder = GroundedSamEncoder(
         size=(args.width, args.height),
+        dino_model=dino_model,
+        sam_model=sam_model,
         box_threshold=args.box_threshold,
         text_threshold=args.text_threshold,
         local_files_only=args.local_files_only,
