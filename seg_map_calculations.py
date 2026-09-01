@@ -1455,6 +1455,16 @@ def main():
     if args.local_files_only:
         os.environ["HF_HUB_OFFLINE"]      = "1"
         os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        # --model's default ("checkpoints/local_models/segformer-b5-cityscapes")
+        # is relative -- only resolves correctly when launched from the repo
+        # root. Anchor to PROJECT_ROOT so it works from any launch directory,
+        # same fix already applied to grounded_sam_map_calculations.py.
+        # PROJECT_ROOT / args.model is a no-op if --model was already passed
+        # as an absolute path (pathlib silently discards the left operand
+        # when the right one is absolute) -- safe either way. Only done in
+        # this branch: --model is a HF Hub id, not a path, when
+        # local_files_only=False, and must not be touched.
+        args.model = str(PROJECT_ROOT / args.model)
 
     # Resolve device LOUDLY: prints full GPU diagnostics and raises a clear
     # error (instead of silently running on CPU) unless --device cpu was
