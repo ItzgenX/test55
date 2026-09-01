@@ -64,7 +64,7 @@ ddp_timeout_seconds: 5400
 
 tag: ''
 
-local_files_only: false
+local_files_only: true
 
 hydra:
   run:

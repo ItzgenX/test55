@@ -17,7 +17,7 @@ device: null  # null -> auto-detect a GPU via resolve_device(); "cpu" to opt in 
 size: [1280, 800]  # (width, height)
 resize_mode: aspect
 seed: 42
-local_files_only: false
+local_files_only: true
 
 # Only read/used when local_files_only=true (offline, from local checkpoint folders).
 base_model_path: checkpoints/local_models/stable-diffusion-xl-base-1.0

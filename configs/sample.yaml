@@ -22,4 +22,4 @@ hydra:
   job:
     chdir: true
 
-local_files_only: false
+local_files_only: true

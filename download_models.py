@@ -48,6 +48,15 @@ repo's full model list):
                                       (mIoU controllability check), and
                                       segformer_training.py's optional
                                       val_miou metric.
+  4. qwen2-vl-7b-instruct          -- offline prompt-enrichment captioner
+                                      used by enrich_prompts.py. NOT BLIP --
+                                      enrich_prompts.py's own docstring
+                                      explains why (BLIP is a small,
+                                      non-instructable captioner; Qwen2-VL
+                                      is a real instructable VLM). This was
+                                      BLIP here until enrich_prompts.py was
+                                      upgraded to Qwen2-VL and this script
+                                      wasn't updated to match -- fixed.
 
 Deliberately NOT downloaded here (leftovers from the original LoRAdapter
 repo -- stable-diffusion-v1-5, epiCRealism, sd-vae-ft-mse, MiDaS/
@@ -72,7 +81,7 @@ Usage:
 import argparse
 import os
 from diffusers import StableDiffusionXLPipeline, AutoencoderKL
-from transformers import SegformerForSemanticSegmentation, BlipForConditionalGeneration, BlipProcessor
+from transformers import SegformerForSemanticSegmentation, AutoProcessor, Qwen2VLForConditionalGeneration
 
 # --- Hugging Face authentication -------------------------------------------- #
 # Paste your HF READ token here, or leave empty for public models.
@@ -145,7 +154,7 @@ else:
 
 
 # ── 3. SegFormer-b5-Cityscapes (offline precompute + inference mIoU check) ─ #
-banner("3/3  SegFormer-b5-Cityscapes (segmentation encoder)")
+banner("3/4  SegFormer-b5-Cityscapes (segmentation encoder)")
 seg_path = os.path.join(LOCAL_MODEL_DIR, "segformer-b5-cityscapes")
 if already_downloaded(seg_path, marker="config.json"):
     print(f"  Already present -> {seg_path}  (skipped; pass --force to re-download)")
@@ -158,22 +167,26 @@ else:
     print(f"  Saved -> {seg_path}")
 
 
-# ── 4. BLIP captioning (offline prompt enrichment, enrich_prompts.py) ────── #
-banner("4/4  BLIP image captioning (prompt enrichment)")
-blip_path = os.path.join(LOCAL_MODEL_DIR, "blip-image-captioning-large")
-if already_downloaded(blip_path, marker="config.json"):
-    print(f"  Already present -> {blip_path}  (skipped; pass --force to re-download)")
+# ── 4. Qwen2-VL-7B-Instruct (offline prompt enrichment, enrich_prompts.py) ── #
+# NOT BLIP -- enrich_prompts.py was upgraded to Qwen2-VL (a real instructable
+# VLM, unlike BLIP's small non-instructable captioner) and this script must
+# download what that script actually loads by default, or a fresh offline
+# setup would have the wrong model on disk.
+banner("4/4  Qwen2-VL-7B-Instruct (prompt enrichment captioner)")
+qwen_path = os.path.join(LOCAL_MODEL_DIR, "qwen2-vl-7b-instruct")
+if already_downloaded(qwen_path, marker="config.json"):
+    print(f"  Already present -> {qwen_path}  (skipped; pass --force to re-download)")
 else:
-    blip_model = BlipForConditionalGeneration.from_pretrained(
-        "Salesforce/blip-image-captioning-large",
+    qwen_model = Qwen2VLForConditionalGeneration.from_pretrained(
+        "Qwen/Qwen2-VL-7B-Instruct",
         token=HF_TOKEN or None,
     )
-    blip_model.save_pretrained(blip_path)
-    BlipProcessor.from_pretrained(
-        "Salesforce/blip-image-captioning-large",
+    qwen_model.save_pretrained(qwen_path)
+    AutoProcessor.from_pretrained(
+        "Qwen/Qwen2-VL-7B-Instruct",
         token=HF_TOKEN or None,
-    ).save_pretrained(blip_path)
-    print(f"  Saved -> {blip_path}")
+    ).save_pretrained(qwen_path)
+    print(f"  Saved -> {qwen_path}")
 
 
 # ── Summary ──────────────────────────────────────────────────────────────────
@@ -186,7 +199,7 @@ for name, marker in [
     ("stable-diffusion-xl-base-1.0", "model_index.json"),
     ("sdxl-vae-fp16-fix", "config.json"),
     ("segformer-b5-cityscapes", "config.json"),
-    ("blip-image-captioning-large", "config.json"),
+    ("qwen2-vl-7b-instruct", "config.json"),
 ]:
     path = os.path.join(LOCAL_MODEL_DIR, name)
     status = "OK" if os.path.isfile(os.path.join(path, marker)) else "MISSING"
