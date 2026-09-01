@@ -88,6 +88,8 @@ GPU / DEVICE:
 import argparse
 import json
 import os
+import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -101,6 +103,54 @@ from src.utils import resolve_device, auto_batch_size
 
 # LOCKED model (b5, not b0 — see check_seg_accuracy.py for measured mIoU). Use --local_files_only False for first download.
 DEFAULT_SEG_MODEL = "nvidia/segformer-b5-finetuned-cityscapes-1024-1024"
+
+PROJECT_ROOT = Path(os.path.abspath(__file__)).parent
+SCRIPT_NAME = "seg_map_calc"
+
+
+class _Tee:
+    """Duplicates every write to stdout/stderr into a real log file too.
+
+    This script's progress/status is entirely print()-based (hundreds of
+    call sites) -- converting all of them to a logging.Logger would be a
+    large, risky rewrite for a diagnostic-only script. A tee gets the actual
+    goal (every run leaves a persistent, re-readable log under outputs/logs/,
+    not just console output that vanishes when the terminal closes) without
+    touching any of those call sites. Same mandatory-logging guarantee
+    grounded_sam_map_calculations.py's logging.FileHandler setup provides,
+    just via a different, lower-risk mechanism for a print()-based script.
+    """
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+            s.flush()
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+
+def _setup_logging(log_dir: Path) -> Path:
+    """Mandatory console+file logging -- every run writes a timestamped log
+    under outputs/logs/, mirroring grounded_sam_map_calculations.py's own
+    mandatory-logging guarantee (see _Tee docstring for why the mechanism
+    differs here)."""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    log_path = log_dir / f"{SCRIPT_NAME}_{ts}.log"
+    log_file = open(log_path, "w", encoding="utf-8")
+    # stdout only, NOT stderr: tqdm's progress bar writes carriage-return
+    # (\r) updates to stderr by default -- teeing that into a plain text
+    # file would spam it with hundreds of overlapping redraws instead of a
+    # readable log. print()'s actual status/summary lines (the useful
+    # content) all go to stdout, which this does capture.
+    sys.stdout = _Tee(sys.__stdout__, log_file)
+    print(f"Log file: {log_path}")
+    return log_path
 
 
 def parse_bool(value):
@@ -259,8 +309,17 @@ def precompute_segmentation_maps(
     path_to_seg = {}
     processed = skipped = errors = 0
 
+    # tqdm's own bar updates via \\r, which never reaches the log file (see
+    # _Tee -- stderr is deliberately not teed to avoid spamming the file with
+    # redraws). Print a real progress line into stdout (and therefore the log
+    # file) at a fixed number of checkpoints regardless of dataset size, so a
+    # `tail -f`/re-opened log always shows real, recent progress -- same fix
+    # as grounded_sam_map_calculations.py's precompute_grounded_sam_maps.
+    n_batches = max(1, (len(image_paths) + batch_size - 1) // batch_size)
+    log_every = max(1, n_batches // 20)
+
     pbar = tqdm(range(0, len(image_paths), batch_size), desc="Computing seg maps")
-    for batch_start in pbar:
+    for _batch_i, batch_start in enumerate(pbar, start=1):
         batch_paths = image_paths[batch_start: batch_start + batch_size]
 
         # Cache-hit check: if the output PNG already exists, reuse it.
@@ -338,6 +397,9 @@ def precompute_segmentation_maps(
             processed += 1
 
         pbar.set_postfix(processed=processed, skipped=skipped, errors=errors)
+        if _batch_i % log_every == 0 or _batch_i == n_batches:
+            print(f"  [progress] batch {_batch_i}/{n_batches} -- "
+                  f"processed={processed} skipped={skipped} errors={errors}")
 
     print(f"\n{'='*52}")
     print(f"  Processed : {processed} images")
@@ -599,10 +661,22 @@ def build_segmentation_training_jsons(
                 print(f"  [WARN] No seg result for {abs_img_p} — entry skipped.")
                 n_skipped += 1
                 continue
+            # ground_truth: carried through from the input row as-is (never
+            # guessed from a naming convention -- a guessed path only holds
+            # for one specific local layout). "" if the input row has none.
+            # Same resolution/carry-forward discipline as
+            # grounded_sam_map_calculations.py's own manifest writer -- this
+            # script previously dropped the field entirely, losing the link
+            # to real ground truth (e.g. data/custom_dataset's gtFine labels)
+            # by the time training's own manifest was written.
+            _gt = entry.get("ground_truth", "")
+            if _gt and not Path(_gt).is_absolute():
+                _gt = (Path.cwd() / _gt).resolve().as_posix()
             out_entries.append({
                 "raw_image_path": abs_img_p.as_posix(),
                 "seg_path":       Path(seg_abs_str).resolve().as_posix(),
                 "prompt":         entry["prompt"],
+                "ground_truth":   _gt,
             })
 
         out_path = output_dir / f"{split}.jsonl"
@@ -902,6 +976,11 @@ def build_seg_training_from_scan(
                 # pairing would be invisible and poison training.
                 n_skipped += 1
                 continue
+            # ground_truth: same carry-forward discipline as the --data_dir
+            # mode function above -- "" if the input row has none.
+            _gt = entry.get("ground_truth", "")
+            if _gt and not Path(_gt).is_absolute():
+                _gt = (Path.cwd() / _gt).resolve().as_posix()
             # ABSOLUTE paths, as_posix (forward slashes work on Windows AND
             # Linux); dataset lives outside the repo so relative paths would
             # break the moment the repo moves.
@@ -909,6 +988,7 @@ def build_seg_training_from_scan(
                 "raw_image_path": Path(raw_str).resolve().as_posix(),
                 "seg_path":       Path(seg).resolve().as_posix(),
                 "prompt":         entry["prompt"],   # copied VERBATIM — never edited
+                "ground_truth":   _gt,
             })
 
         out_path = output_dir / f"{split}.jsonl"
@@ -1311,6 +1391,8 @@ def main():
              "Default: raw_image.jpg",
     )
     args = parser.parse_args()
+
+    _setup_logging(PROJECT_ROOT / "outputs" / "logs")
 
     if not any([args.dataset_dir, args.data_dir, args.input_dir,
                 args.image, args.json_file]):

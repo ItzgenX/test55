@@ -10,7 +10,7 @@ defaults:
   - /model: sdxl
   - /lora@lora.struct: struct
   - override /lora/encoder@lora.struct.encoder: segformer  # real encoder needed here, for the mIoU controllability check
-  - override /lora/mapper_network@lora.struct.mapper_network: fsmXL
+  - override /lora/mapper_network@lora.struct.mapper_network: segidXL  # class-ID embedding conditioning, not RGB colorize -- must match training
   - _self_
 
 device: null  # null -> auto-detect a GPU via resolve_device(); "cpu" to opt in explicitly

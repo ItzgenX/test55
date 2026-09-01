@@ -65,9 +65,12 @@ import numpy as np
 import torchvision.transforms.functional as TF
 from PIL import Image, ImageDraw
 from accelerate.logging import get_logger
+
+_module_logger = get_logger(__name__)
 import random
 import signal
 import os
+import time
 import traceback
 from functools import reduce
 
@@ -79,7 +82,7 @@ from src.utils import (
     compute_psnr_ssim,
     compute_miou,
 )
-from src.encoders.seg_encoder import seg_ids_from_colormap
+from src.encoders.seg_encoder import seg_colorize_ids
 
 
 torch.set_float32_matmul_precision("high")
@@ -210,30 +213,55 @@ def _save_checkpoint_segmentation_images(
 
     for n, (idx, kind) in enumerate(zip(idxs, kinds)):
         item = val_dataset[idx]
-        seg = item["seg"].unsqueeze(0).to(device)  # [1,3,H,W] in [0,1]
+        # classid conditioning (this branch's default, see configs/data/
+        # segformer_jsonl.yaml): [H,W] Long, values 1..19 (0=NULL/padding_idx,
+        # src/data/local_seg.py._load_seg_ids). NOT an RGB colour map -- that
+        # only exists as a display-only copy below, never fed to the model.
+        seg = item["seg"].unsqueeze(0).to(device)  # [1,H,W] Long, 1..19
         cs = [seg] * n_loras
         prompt = cfg.prompt if cfg.get("prompt") else item["caption"]
+        # Colourised copy for the SEG MAP display panel only -- seg_colorize_ids
+        # expects raw 0..num_classes-1 ids, so undo the dataset's own +1 NULL
+        # shift first (same convention _load_seg_ids documents).
+        seg_display = seg_colorize_ids((seg[0] - 1).clamp(min=0).cpu(), palette.cpu())[0]  # [3,H,W] in [0,1]
 
         # Fixed per-scene seed: the ONLY thing that differs between the same
         # scene at two checkpoints is the weights, so a visible change is a real
         # change rather than a different noise draw.
+        #
+        # Timing logged around every call: an earlier smoke test on this
+        # codebase's grounded_sam branch sat silent for 26+ minutes during
+        # exactly this kind of call with no way to tell "slow" from "stuck" --
+        # the tqdm bar never reaches the log file, only real logger.info calls
+        # do. Same fix applied here preventively, not after hitting the same
+        # problem twice.
+        _t0 = time.time()
         pred = model.sample(
             prompt=[prompt], num_images_per_prompt=1, cs=cs,
             generator=torch.Generator(device=device).manual_seed(cfg.seed),
             cfg_mask=cfg_mask, skip_encode=True,
             height=size_h, width=size_w, num_inference_steps=num_inference_steps,
         )[0]
+        _module_logger.info(
+            f"[seg grid] scene {n + 1}/{len(idxs)} ({kind}) pred sample "
+            f"done in {time.time() - _t0:.1f}s"
+        )
 
         raw = None
         if include_empty:
+            _t0 = time.time()
             raw = model.sample(
                 prompt=[""], num_images_per_prompt=1, cs=cs,
                 generator=torch.Generator(device=device).manual_seed(cfg.seed),
                 cfg_mask=cfg_mask, skip_encode=True,
                 height=size_h, width=size_w, num_inference_steps=num_inference_steps,
             )[0]
+            _module_logger.info(
+                f"[seg grid] scene {n + 1}/{len(idxs)} ({kind}) raw sample "
+                f"done in {time.time() - _t0:.1f}s"
+            )
 
-        img = _seg_scene_image(item["jpg"], seg[0], pred, cfg.size, raw_pil=raw)
+        img = _seg_scene_image(item["jpg"], seg_display, pred, cfg.size, raw_pil=raw)
         img.save(out_dir / f"sample_{n:02d}_{kind}.jpg", quality=95)
         prompts.append(prompt)
         images.append(np.asarray(img))
@@ -250,17 +278,21 @@ def _save_checkpoint_segmentation_images(
         psnrs.append(p_)
         ssims.append(s_)
 
-        # Controllability: the structure the model was TOLD to follow (palette-
-        # inverted from the conditioning map itself -- exact, no model call)
-        # vs. the structure it actually produced (the metric segmenter re-run on
-        # the generated image). Skipped entirely when no segmenter was built.
+        # Controllability: the structure the model was TOLD to follow (the
+        # conditioning ids themselves, +1-shift undone -- a plain index shift,
+        # no colormap inversion needed since this conditioning was never
+        # colourised to begin with; seg_ids_from_colormap would crash here on
+        # the shape mismatch, it expects [3,H,W] RGB and seg[0] is [H,W] Long
+        # ids) vs. the structure it actually produced (the metric segmenter
+        # re-run on the generated image). Skipped entirely when no segmenter
+        # was built.
         if metric_segmenter is not None:
-            target_ids = seg_ids_from_colormap(seg[0], palette)          # [H,W]
+            target_ids = (seg[0] - 1).clamp(min=0).cpu()                 # [H,W], 0..18
             gen_t = (
                 TF.to_tensor(pred.resize((size_w, size_h)).convert("RGB"))
                 .unsqueeze(0).to(device) * 2.0 - 1.0
             )                                                            # [1,3,H,W] in [-1,1]
-            pred_ids = metric_segmenter.label_ids(gen_t)[0]              # [H,W]
+            pred_ids = metric_segmenter.label_ids(gen_t)[0].cpu()        # [H,W]
             mious.append(
                 compute_miou(pred_ids, target_ids, num_classes=int(palette.shape[0]))
             )
@@ -327,7 +359,14 @@ def _segmentation_validation_loss(model, val_dataloader, n_loras, cfg, cfg_mask,
     for m in model.mappers:
         m.train()
     for e in model.encoders:
-        e.train()
+        # skip encoders with zero trainable params (e.g. SegmentationEncoder,
+        # which self-freezes AND self-evals its SegFormer-B5 weights at
+        # construction) -- .train() doesn't touch requires_grad, but it does
+        # re-enable Dropout and let BatchNorm/LayerNorm running stats drift
+        # away from their pretrained calibration, degrading its own
+        # segmentation quality as training progresses
+        if any(p.requires_grad for p in e.parameters()):
+            e.train()
 
     torch.set_rng_state(cpu_rng)
     if cuda_rng is not None:
@@ -580,6 +619,7 @@ def main(cfg):
         if not accelerator.is_main_process:
             return
 
+        _t_ckpt0 = time.time()
         ckpt_dir = (output_path / "best_model") if is_best else (output_path / stem)
         save_checkpoint(
             model.get_lora_state_dict(accelerator.unwrap_model(unet)),
@@ -587,6 +627,7 @@ def main(cfg):
             None,
             ckpt_dir,
         )
+        logger.info(f"[seg grid] {stem}: weights saved in {time.time() - _t_ckpt0:.1f}s -- generating monitoring images now")
 
         try:
             unet.eval()
@@ -637,8 +678,12 @@ def main(cfg):
             unet.train()
             for m in mappers:
                 m.train()
-            for e in encoders:
-                e.train()
+            for enc in encoders:
+                # see _segmentation_validation_loss: skip encoders with no
+                # trainable params so a self-frozen SegmentationEncoder
+                # stays in eval mode
+                if any(p.requires_grad for p in enc.parameters()):
+                    enc.train()
 
     def do_segmentation_validation(label, epoch_num, epoch_frac):
         """The CHEAP half, run every val_steps: val/loss, plus a best_model
@@ -684,8 +729,12 @@ def main(cfg):
         unet.train()
         for m in mappers:
             m.train()
-        for m in encoders:
-            m.train()
+        for enc in encoders:
+            # see _segmentation_validation_loss: skip encoders with no
+            # trainable params so a self-frozen SegmentationEncoder stays
+            # in eval mode
+            if any(p.requires_grad for p in enc.parameters()):
+                enc.train()
 
         for step, batch in enumerate(train_dataloader):
             _grad_norm = None  # only set on true optimizer steps (sync_gradients)

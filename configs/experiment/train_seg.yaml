@@ -106,15 +106,13 @@ data:
   val_workers:    1
   # DIFF: SegFormer manifests built by seg_map_calculations.py.
   # val_jsonl must be the real val split — NEVER test.
-  # CONFIRMED MISSING (2026-08-24 real bug audit): neither file exists on this
-  # machine right now -- `os.path.exists` checked directly, and a repo-wide
-  # `find data -iname *.jsonl` found no segformer-specific manifest anywhere.
-  # git status shows data_full/seg_training_aspect/{train,val}.jsonl as
-  # deleted, uncommitted, since before this session started. Re-run
-  # `python seg_map_calculations.py --data_dir data/` before training this
-  # branch again -- it will fail with FileNotFoundError as configured today.
-  train_jsonl: data/seg_training_aspect/train.jsonl
-  val_jsonl:   data/seg_training_aspect/val.jsonl
+  # Currently a 10/10/10 dev/smoke-test subset (built via
+  # `seg_map_calculations.py --data_dir data/dataset --dry_run_n 10`,
+  # verified end-to-end calc->train->inference on 2026-08-31). Re-run without
+  # --dry_run_n against the full data/dataset/{train,val}.jsonl manifests
+  # (4400/500 real entries, seg_path still empty) before a real training run.
+  train_jsonl: data/dataset/seg_training_aspect/train.jsonl
+  val_jsonl:   data/dataset/seg_training_aspect/val.jsonl
 
 # =============================================================================
 # 3. GLOBAL FALLBACK PROMPT
