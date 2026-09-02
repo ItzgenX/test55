@@ -18,3 +18,10 @@ val_workers: 1
 # legacy palette-colorized map path, kept for the class -- no shipped
 # grounded_sam config selects it. Must match configs/lora/mapper_network/segidXL.yaml.
 conditioning: classid
+# false (default): seg_path PNGs are 0-indexed (road=0..guard_rail=27,
+# 255=ignore), this repo's own grounded_sam_map_calculations.py convention --
+# see src/data/local_seg.py's _load_seg_ids docstring. Only set true if
+# grounded_sam_check_seg_map_convention.py confirms your PNGs came from a
+# different tool that already writes 1-indexed class ids -- otherwise the
+# default's "+1" shift is correct and this must stay false.
+seg_map_already_shifted: false

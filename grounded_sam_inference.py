@@ -88,7 +88,7 @@ from hydra.utils import get_original_cwd
 from src.model import ModelBase
 from src.utils import add_lora_from_config, resolve_device, compute_miou
 from src.data.transforms import build_seg_display_preprocess, normalize_size
-from src.encoders.seg_encoder import seg_ids_from_colormap, seg_colorize_ids
+from src.encoders.map_colorize import seg_ids_from_colormap, seg_colorize_ids
 from src.encoders.grounded_sam_encoder import carla_palette_tensor
 
 torch.set_float32_matmul_precision("high")

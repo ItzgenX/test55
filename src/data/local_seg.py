@@ -7,7 +7,7 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 
 from src.data.transforms import build_seg_preprocess, normalize_size
-from src.encoders.seg_encoder import seg_colorize_ids
+from src.encoders.map_colorize import seg_colorize_ids
 from src.encoders.grounded_sam_encoder import carla_palette_tensor
 
 
@@ -31,12 +31,21 @@ class SegJsonDataset(Dataset):
       (segidXL vs fsmXL).
     """
 
-    def __init__(self, jsonl_path: str, size, resize_mode: str = "aspect", conditioning: str = "classid"):
+    def __init__(
+        self, jsonl_path: str, size, resize_mode: str = "aspect", conditioning: str = "classid",
+        seg_map_already_shifted: bool = False,
+    ):
         self.jsonl_path = Path(jsonl_path)
         self.size = normalize_size(size)  # (width, height)
         self.resize_mode = resize_mode
         assert conditioning in ("classid", "rgb"), f"conditioning must be 'classid' or 'rgb', got {conditioning!r}"
         self.conditioning = conditioning
+        # See _load_seg_ids's docstring -- False (default) assumes this repo's
+        # own 0..27/255 on-disk convention. Only set True if you've confirmed
+        # (via grounded_sam_check_seg_map_convention.py, not a guess) that
+        # your seg_path PNGs came from a different tool that already writes
+        # 1-indexed class ids.
+        self.seg_map_already_shifted = seg_map_already_shifted
 
         with open(self.jsonl_path, "r", encoding="utf-8") as f:
             self.rows = [json.loads(line) for line in f if line.strip()]
@@ -79,20 +88,36 @@ class SegJsonDataset(Dataset):
         return colour
 
     def _load_seg_ids(self, seg_path: str) -> torch.Tensor:
-        """Raw class-id PNG (values 0..27, or 255=IGNORE_ID) -> Long [H, W]
-        remapped for SegIDStructureMapperXL's embedding table: 0..27 -> 1..28
-        (0 reserved NULL/padding_idx, used by model.py's CFG dropout), 255 ->
-        29 (a DEDICATED ignore/void row, distinct from NULL -- "no detection
+        """Raw class-id PNG -> Long [H, W] remapped for SegIDStructureMapperXL's
+        embedding table: real classes -> 1..28 (0 reserved NULL/padding_idx,
+        used by model.py's CFG dropout), unmatched/ignore pixels -> 29 (a
+        DEDICATED ignore/void row, distinct from NULL -- "no detection
         touched this pixel" is real per-pixel information, not the same
         thing as "the whole map was CFG-dropped"). See that mapper class's
-        docstring for the full index scheme."""
+        docstring for the full index scheme.
+
+        Default assumes this repo's own convention (src/encoders/
+        grounded_sam_encoder.py writes CARLA_CLASSES.index(cls) directly:
+        0..27 for the 28 real classes, 255=IGNORE_ID for unmatched pixels)
+        and shifts 0..27 -> 1..28. If your PNGs came from a DIFFERENT
+        precompute tool that already writes 1-indexed values (road=1, not
+        0), set seg_map_already_shifted=true in the data config -- applying
+        the default +1 shift on top of already-shifted data silently
+        mislabels every real class by one position. Verify which case your
+        data is with grounded_sam_check_seg_map_convention.py before
+        deciding -- don't guess."""
         w, h = self.size
         ids_pil = Image.open(seg_path).convert("L")
         if ids_pil.size != (w, h):
             # NEAREST only: interpolating class ids would fabricate classes
             # that were never in the source map.
             ids_pil = ids_pil.resize((w, h), Image.NEAREST)
-        ids = torch.from_numpy(np.asarray(ids_pil, dtype=np.int64))  # [H, W], 0..27 or 255
+        ids = torch.from_numpy(np.asarray(ids_pil, dtype=np.int64))  # [H, W]
+        if self.seg_map_already_shifted:
+            # Already 1..28 real / 0 reserved on disk in this convention --
+            # only IGNORE_ID (255) needs remapping to this pipeline's 29.
+            ignore_mask = ids > self.palette.shape[0]  # anything past the real 1..28 range
+            return torch.where(ignore_mask, torch.full_like(ids, 29), ids)
         ignore_mask = ids >= self.palette.shape[0]  # catches 255 (and any other out-of-range id)
         return torch.where(ignore_mask, torch.full_like(ids, 29), ids + 1)
 
@@ -123,14 +148,15 @@ class SegJsonDataModule:
         workers: int = 4,
         val_workers: int = 1,
         conditioning: str = "classid",
+        seg_map_already_shifted: bool = False,
     ):
         self.batch_size = batch_size
         self.val_batch_size = val_batch_size
         self.workers = workers
         self.val_workers = val_workers
 
-        self.train_dataset = SegJsonDataset(train_jsonl, size, resize_mode, conditioning)
-        self.val_dataset = SegJsonDataset(val_jsonl, size, resize_mode, conditioning)
+        self.train_dataset = SegJsonDataset(train_jsonl, size, resize_mode, conditioning, seg_map_already_shifted)
+        self.val_dataset = SegJsonDataset(val_jsonl, size, resize_mode, conditioning, seg_map_already_shifted)
 
     def train_dataloader(self) -> DataLoader:
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.workers)

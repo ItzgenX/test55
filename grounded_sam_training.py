@@ -96,7 +96,7 @@ from tqdm.auto import tqdm
 
 from src.model import ModelBase
 from src.utils import add_lora_from_config, save_checkpoint, print_gpu_diagnostics, write_training_params_txt, compute_miou
-from src.encoders.seg_encoder import seg_colorize_ids
+from src.encoders.map_colorize import seg_colorize_ids
 from src.encoders.grounded_sam_encoder import carla_palette_tensor, CARLA_CLASSES
 from src.data.transforms import normalize_size
 

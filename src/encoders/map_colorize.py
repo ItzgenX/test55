@@ -1,14 +1,12 @@
 import torch
 
-# On this branch (grounded_sam), this file exists ONLY for the two generic,
-# palette-parameterized id<->colour helpers below -- every caller here passes
-# grounded_sam_encoder.py's own carla_palette_tensor(), never a Cityscapes
-# palette. The SegFormer-specific live encoder (SegmentationEncoder) and its
-# 19-class SEG_CITYSCAPES_PALETTE that used to live in this file belong to
-# the segformer branch's own copy, not this one -- removed here since nothing
-# on this branch ever instantiated them (no config references
-# SegmentationEncoder; the only encoder config on this branch is
-# configs/lora/encoder/grounded_sam.yaml).
+# Generic, palette-parameterized class-id <-> colour helpers, used for
+# DISPLAY ONLY (checkpoint monitoring grids, inference comparison grids,
+# dataset-loading preview fallback) -- the model's actual conditioning input
+# never goes through these, it stays raw class ids the whole way (see
+# SegIDStructureMapperXL). Every caller on this branch passes
+# grounded_sam_encoder.py's own carla_palette_tensor(); the palette is a
+# parameter here so the same two functions work for any class scheme.
 
 
 def seg_colorize_ids(ids: torch.Tensor, palette: torch.Tensor) -> torch.Tensor:

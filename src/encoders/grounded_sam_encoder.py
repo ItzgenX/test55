@@ -7,7 +7,7 @@ from jaxtyping import Float
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection, SamModel, SamProcessor
 
 from src.data.transforms import normalize_size
-from src.encoders.seg_encoder import seg_colorize_ids
+from src.encoders.map_colorize import seg_colorize_ids
 
 # Own 28-class vocabulary, NOT SegFormer's 19-class Cityscapes scheme (that
 # scheme and its own live encoder live only in the segformer branch's copy of
