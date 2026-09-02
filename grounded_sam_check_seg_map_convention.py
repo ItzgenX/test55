@@ -8,12 +8,14 @@ QUICK COMMANDS (run from repo root with conda loradapter env active):
   # --- Plain directory of seg-map PNGs ---
   python grounded_sam_check_seg_map_convention.py --maps_dir /path/to/seg_maps
 
-  # --- Directory of your own yaml files, each with a seg_map key ---
-  python grounded_sam_check_seg_map_convention.py --yaml_dir /path/to/your/yamls
+  # --- Directory of your manifest files (.jsonl -- this repo's own
+  #     train.jsonl/val.jsonl format -- or .yaml/.yml), each row/file
+  #     holding a seg_map/seg_path key ---
+  python grounded_sam_check_seg_map_convention.py --manifest_dir /path/to/your/manifests
 
-  # --- Same, but seg_map paths inside the yaml are relative to a different
-  #     root than the yaml file's own directory ---
-  python grounded_sam_check_seg_map_convention.py --yaml_dir /path/to/your/yamls --base_dir /path/to/maps_root
+  # --- Same, but seg_map paths inside the manifest are relative to a
+  #     different root than the manifest file's own directory ---
+  python grounded_sam_check_seg_map_convention.py --manifest_dir /path/to/your/manifests --base_dir /path/to/maps_root
 
 WHAT THIS ANSWERS: does src/data/local_seg.py's "+1" shift at load time
 (0-indexed disk value -> 1-indexed training id, see
@@ -41,11 +43,16 @@ data.seg_map_already_shifted=true on your training launch command (wired
 through configs/data/grounded_sam_jsonl.yaml -> SegJsonDataModule ->
 SegJsonDataset -- see that flag's docstring in local_seg.py).
 
-YAML SCANNING DETAIL: --yaml_dir recurses into every *.yaml/*.yml under the
-given directory and pulls out every value under a key literally named
-seg_map/seg_path/seg_map_path, at any nesting depth -- not just top-level.
-Relative paths found inside a yaml resolve against that yaml file's own
-directory by default (the common "path next to the config that names it"
+MANIFEST SCANNING DETAIL: --manifest_dir recurses into every *.jsonl,
+*.yaml, and *.yml under the given directory. .jsonl files are read as this
+repo's own manifest convention (see src/data/local_seg.py's SegJsonDataset
+docstring) -- one JSON object per line, each row's own seg_map/seg_path
+key collected directly, not nested further (a manifest row is flat).
+.yaml/.yml files are parsed whole and searched at any nesting depth, since
+a config file's structure isn't fixed the way a manifest row's is. Either
+way, the key must be literally named seg_map/seg_path/seg_map_path.
+Relative paths found inside a file resolve against that file's own
+directory by default (the common "path next to the file that names it"
 convention); pass --base_dir to resolve against a different root instead.
 Any referenced path that doesn't actually exist on disk is reported, not
 silently dropped -- see it as a warning before the check runs on whatever
@@ -53,6 +60,7 @@ files DID resolve.
 """
 import argparse
 import glob
+import json
 import os
 import sys
 
@@ -79,14 +87,39 @@ def find_map_paths_in_yaml(obj, base_dir: str, found: list) -> None:
             find_map_paths_in_yaml(item, base_dir, found)
 
 
-def collect_from_yaml_dir(yaml_dir: str, base_dir_override: str | None) -> list:
-    yaml_files = glob.glob(os.path.join(yaml_dir, "**", "*.yaml"), recursive=True)
-    yaml_files += glob.glob(os.path.join(yaml_dir, "**", "*.yml"), recursive=True)
-    if not yaml_files:
-        print(f"No .yaml/.yml files found under {yaml_dir}")
+def collect_from_jsonl(jsonl_path: str, base_dir: str, found: list) -> None:
+    """Each line is one flat JSON object (a manifest row) -- collect any
+    MAP_KEYS value directly from it, same relative-path resolution as yaml."""
+    with open(jsonl_path, "r", encoding="utf-8") as fh:
+        for lineno, line in enumerate(fh, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception as e:
+                print(f"  [skip] {jsonl_path}:{lineno}: failed to parse ({e})")
+                continue
+            if not isinstance(row, dict):
+                continue
+            for k, v in row.items():
+                if k in MAP_KEYS and isinstance(v, str):
+                    p = v if os.path.isabs(v) else os.path.join(base_dir, v)
+                    found.append(p)
+
+
+def collect_from_manifest_dir(manifest_dir: str, base_dir_override: str | None) -> list:
+    jsonl_files = glob.glob(os.path.join(manifest_dir, "**", "*.jsonl"), recursive=True)
+    yaml_files = glob.glob(os.path.join(manifest_dir, "**", "*.yaml"), recursive=True)
+    yaml_files += glob.glob(os.path.join(manifest_dir, "**", "*.yml"), recursive=True)
+    if not jsonl_files and not yaml_files:
+        print(f"No .jsonl/.yaml/.yml files found under {manifest_dir}")
         sys.exit(1)
 
     found: list = []
+    for jf in jsonl_files:
+        base_dir = base_dir_override or os.path.dirname(jf)
+        collect_from_jsonl(jf, base_dir, found)
     for yf in yaml_files:
         try:
             with open(yf, "r", encoding="utf-8") as fh:
@@ -97,10 +130,10 @@ def collect_from_yaml_dir(yaml_dir: str, base_dir_override: str | None) -> list:
         base_dir = base_dir_override or os.path.dirname(yf)
         find_map_paths_in_yaml(data, base_dir, found)
 
-    print(f"Scanned {len(yaml_files)} yaml file(s) under {yaml_dir}, "
-          f"found {len(found)} seg_map reference(s).")
+    print(f"Scanned {len(jsonl_files)} jsonl + {len(yaml_files)} yaml file(s) "
+          f"under {manifest_dir}, found {len(found)} seg_map reference(s).")
     if not found:
-        print(f"No key in {sorted(MAP_KEYS)} was found in any yaml under {yaml_dir} -- "
+        print(f"No key in {sorted(MAP_KEYS)} was found under {manifest_dir} -- "
               f"if your key is named something else, pass --maps_dir directly instead.")
         sys.exit(1)
     return found
@@ -110,10 +143,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--maps_dir", help="Plain directory of seg-map PNGs (recursed).")
-    src.add_argument("--yaml_dir", help="Directory of yaml files, each with a seg_map key.")
+    src.add_argument("--manifest_dir", help="Directory of .jsonl/.yaml/.yml files, each with a seg_map key.")
     ap.add_argument("--base_dir", default=None,
                      help="Resolve relative seg_map paths against this dir instead of "
-                          "each yaml file's own directory.")
+                          "each manifest file's own directory.")
     ap.add_argument("--limit", type=int, default=30, help="Max number of PNGs to sample.")
     args = ap.parse_args()
 
@@ -123,7 +156,7 @@ def main():
             print(f"No PNGs found under {args.maps_dir}")
             sys.exit(1)
     else:
-        files = collect_from_yaml_dir(args.yaml_dir, args.base_dir)
+        files = collect_from_manifest_dir(args.manifest_dir, args.base_dir)
         missing = [f for f in files if not os.path.isfile(f)]
         files = [f for f in files if os.path.isfile(f)]
         if missing:
