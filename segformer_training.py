@@ -440,6 +440,20 @@ def main(cfg):
     else:
         _metric_seg_path = cfg.get("seg_model_name", "nvidia/segformer-b5-finetuned-cityscapes-1024-1024")
 
+    # Print the ACTUAL resolved value for every model right before it gets
+    # loaded -- mirrors the same diagnostic added to grounded_sam_training.py.
+    # Training never had this, which is exactly why "why is it hitting HF
+    # Hub instead of my local mount" was hard to diagnose from the log alone:
+    # each swap above is gated on `if cfg.get("base_model_path"):` etc, so a
+    # missing/empty config key silently no-ops the swap and falls through to
+    # a HF Hub id -- this makes that fall-through visible immediately instead
+    # of only showing up as a from_pretrained failure with no context.
+    _vae_path_display = cfg.model.get("vae_path") or "(none -- using base model's own VAE)"
+    print(f"[model] base = {cfg.model.model_name}")
+    print(f"[model] vae_path = {_vae_path_display}")
+    print(f"[model] seg encoder (metric only, not loaded at train time) = {_metric_seg_path}")
+    print(f"[model] local_files_only = {cfg.get('local_files_only', False)}")
+
     # Rank 0 generates every monitoring image while the other ranks sit blocked
     # in the next gradient all-reduce. With n_grid_images scenes x
     # num_inference_steps each, that stall can exceed NCCL's default 30-minute
