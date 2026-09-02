@@ -410,6 +410,24 @@ def main(cfg):
         if cfg.get("vae_local_path") and cfg.model.get("vae_path"):
             cfg.model.vae_path = os.path.join(_root, cfg.vae_local_path)
 
+    # Print the ACTUAL resolved value for every model right before it gets
+    # loaded -- same diagnostic grounded_sam_inference.py already has.
+    # Training never had this, which is exactly why "why is it hitting HF
+    # Hub instead of my local mount" was hard to diagnose from the log alone:
+    # each swap above is gated on `if cfg.get("base_model_path"):` etc, so a
+    # missing/empty config key silently no-ops the swap and falls through to
+    # a HF Hub id -- this makes that fall-through visible immediately instead
+    # of only showing up as a from_pretrained failure with no context.
+    _vae_path_display = cfg.model.get("vae_path") or "(none -- using base model's own VAE)"
+    print(f"[model] base = {cfg.model.model_name}")
+    print(f"[model] vae_path = {_vae_path_display}")
+    if _enc_has_dino_sam:
+        print(f"[model] dino = {cfg.lora.struct.encoder.dino_model}")
+        print(f"[model] sam  = {cfg.lora.struct.encoder.sam_model}")
+    else:
+        print("[model] encoder = Identity (skip_encode=True, no dino/sam model loaded at train time)")
+    print(f"[model] local_files_only = {cfg.get('local_files_only', False)}")
+
     accelerator = Accelerator(
         project_dir=output_path / "logs",
         log_with="tensorboard",
