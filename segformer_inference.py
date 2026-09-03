@@ -224,17 +224,24 @@ def main(cfg):
     # explicitly passed. See src/utils.py resolve_device() for why this exists.
     device = resolve_device(cfg.device)
 
-    # Resolve output_dir from the original repo root (not Hydra's run dir),
-    # then make it UNIQUE PER RUN: every inference run stores its results in
-    # its own folder, so two runs can never overwrite or mix outputs. A
-    # timestamped subfolder is appended to the configured base path; Hydra's
-    # own run dir already embeds the same date/time format, so the two are
-    # easy to correlate when debugging a specific run.
+    # _root = repo root (Hydra's chdir=true moves cwd into the run dir before
+    # this runs) -- used throughout below to anchor every relative path
+    # (model paths, json_path, seg_path, img_path) back to the repo, not the
+    # run dir. Unrelated to output_dir below; still needed.
     _root = get_original_cwd()
-    _out = Path(cfg.inference.output_dir)
-    _out = _out if _out.is_absolute() else Path(_root) / _out
-    output_dir = _out / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Use Hydra's OWN run dir directly, instead of building a second, separate
+    # timestamped folder under cfg.inference.output_dir -- that used to create
+    # TWO folders per run (Hydra's own outputs/inference_seg/runs/<date>/
+    # <time>/, holding just .hydra/ logs, plus a second, differently-named
+    # outputs/inference/seg/<timestamp>/ actually holding the images). Same
+    # bug, same fix, as grounded_sam_inference.py. Hydra's run dir
+    # (configs/inference_seg.yaml's hydra.run.dir, combined with
+    # hydra.job.chdir=true) already IS a fresh, unique-per-run folder -- no
+    # need to build a second one. Same pattern segformer_training.py already
+    # uses. cfg.inference.output_dir is no longer read (verified no other
+    # file references it).
+    output_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
 
     print(f"\n{'='*60}")
     print(f"  segformer_inference.py")

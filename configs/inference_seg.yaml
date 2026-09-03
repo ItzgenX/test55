@@ -40,7 +40,10 @@ lora:
       adaption_mode: only_res_conv
 
 inference:
-  output_dir: outputs/inference/seg
+  # No output_dir here -- segformer_inference.py writes to Hydra's own run
+  # dir (hydra.run.dir below), not a second separate folder. Removed to avoid
+  # implying it still does anything -- see segformer_inference.py's
+  # output_dir comment for the "two folders" bug this used to cause.
   json_file: null
   seg_maps: []
   images: []
