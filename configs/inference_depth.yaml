@@ -1,0 +1,67 @@
+# Root config for inference_depth.py (@hydra.main(config_name="inference_depth")).
+# Full standalone config, not an experiment override -- inference_depth.py
+# reads several top-level keys directly (base_model_path, midas_model_path, ...),
+# mirroring inference_seg.yaml's shape on the segmentation branches.
+#
+# Usage:
+#   python inference_depth.py ckpt_path=<checkpoint dir> inference.json_file=data/dataset/depth_cache/val.jsonl
+
+defaults:
+  - /model: sdxl
+  - /lora@lora.struct: struct
+  - override /lora/encoder@lora.struct.encoder: identity
+  - override /lora/mapper_network@lora.struct.mapper_network: dsmXL
+  - _self_
+
+device: null  # null -> auto-detect a GPU; "cpu" to opt in explicitly
+size: [1280, 768]  # (width, height) -- the one working resolution, always
+seed: 42
+local_files_only: false
+
+base_model_path: checkpoints/local_models/stable-diffusion-xl-base-1.0
+base_model_name: stabilityai/stable-diffusion-xl-base-1.0
+midas_model_path: checkpoints/local_models/dpt-hybrid-midas
+midas_model_name: Intel/dpt-hybrid-midas
+vae_local_path: checkpoints/local_models/sdxl-vae-fp16-fix
+
+time_ids:
+  original_size: [800, 1280]
+  crops_coords_top_left: [16, 0]
+  target_size: [768, 1280]
+
+ckpt_path: ???
+
+# Domain LoRA (DEPTH-BRANCH-architecture.md §7) -- plain unconditional LoRA,
+# fused into the base UNet BEFORE add_lora_from_config wires the depth
+# adapter in. null -> skip (use base SDXL prior as-is).
+domain_lora_path: null
+
+model:
+  vae_path: madebyollin/sdxl-vae-fp16-fix
+
+lora:
+  struct:
+    cfg: false
+    config:
+      c_dim: 128
+      rank: 64
+      adaption_mode: only_res_conv
+
+inference:
+  output_dir: outputs/inference/depth
+  json_file: null
+  depth_maps: []     # precomputed .npy/.png16 paths -- skip_encode path
+  images: []         # raw source images -- runs DepthPrecomputer live
+  prompts: []
+  n_samples: 1
+  num_inference_steps: 50
+  guidance_scale: 7.5
+  negative_prompt: null
+  lora_scale: 1.0
+  save_generated_only: false
+
+hydra:
+  run:
+    dir: outputs/inference_depth/runs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  job:
+    chdir: true

@@ -1,0 +1,139 @@
+# @package _global_
+#
+# configs/experiment/train_depth.yaml
+# ------------------------------------
+# Depth-conditioning training experiment, for train_depth.py.
+# RULE 0 (DEPTH-BRANCH-architecture.md): this pipeline derives from the
+# original repo's own depth path + arithmetic about SD1.5's block structure
+# only. Nothing here is copied from the segmentation branches' architecture
+# (mapper, LoRA GroupNorm, dataset class, transforms). The yaml *structure*
+# mirrors train_seg.yaml's conventions (same key names/shape) because that's
+# this repo's own config convention, not a segmentation decision.
+#
+# Data comes from compute_depth.py's cached manifests -- encoder is identity
+# (skip_encode=True bypasses it, exactly as the segmentation branches also
+# do, because that's the shared repo mechanism for precomputed conditioning,
+# not something invented for segmentation).
+
+defaults:
+  - /lora@lora.struct: struct
+  - override /lora/encoder@lora.struct.encoder: identity   # unused at train time: skip_encode=True bypasses it
+  - override /lora/mapper_network@lora.struct.mapper_network: fsm15
+  - override /model: sd15
+  - override /data: depth_jsonl
+  - _self_
+
+# =============================================================================
+# MODEL LOADING -- LOCAL vs INTERNET (one switch: local_files_only)
+# =============================================================================
+local_files_only: true
+
+# SD1.5, not SDXL -- matches the original repo/paper exactly (RULE 0), and
+# the original repo's own released depth checkpoint
+# (checkpoints/sd15-depth-128-only-res, download_weights.sh) is SD1.5 --
+# only comparable/resumable against this. No resize tradeoff either:
+# compute_depth.py already crops (never resizes) to the 1280x768 working
+# resolution, and 1280/64=20, 768/64=12 -- both exactly divisible by 64,
+# what SD1.5's UNet needs. FixedStructureMapper15 (fsm15 above) is this
+# repo's own original mapper for a dense per-pixel signal on SD1.5 --
+# DepthStructureMapperXL was specific to an earlier SDXL variant of this
+# branch, not part of the original repo.
+base_model_name: runwayml/stable-diffusion-v1-5
+base_model_path: checkpoints/local_models/stable-diffusion-v1-5
+
+# Not loaded at train time (skip_encode=True bypasses it) -- exists here so
+# compute_depth.py and inference_depth.py load the identical weights.
+midas_model_name: Intel/dpt-hybrid-midas
+midas_model_path: checkpoints/local_models/dpt-hybrid-midas
+
+# =============================================================================
+# HARDWARE
+# =============================================================================
+#   Multi-GPU: accelerate launch --num_processes=N train_depth.py experiment=train_depth
+gradient_checkpointing: true
+gradient_accumulation_steps: 1
+
+# Working resolution is 1280x768 for both image and depth -- always (see
+# DEPTH-BRANCH-architecture.md's resize policy). compute_depth.py already
+# cropped 1280x800 -> 1280x768; nothing resizes here.
+size: [1280, 768]  # [width, height]
+
+# No time_ids block: that's an SDXL-only micro-conditioning mechanism
+# (StableDiffusionXLPipeline's add_time_ids), which SD1.5 has no equivalent
+# of at all -- SD15.forward_easy() takes no such argument. Dropped along
+# with the SDXL model switch above, not overlooked.
+
+# =============================================================================
+# 1. GENERAL TRAINING PARAMETERS
+# =============================================================================
+learning_rate: 1e-4
+lr_scheduler: constant
+epochs: 10
+
+val_steps: 2000
+ckpt_steps: 2000
+
+# =============================================================================
+# 2. DATA -- manifests written by compute_depth.py
+# =============================================================================
+data:
+  batch_size: 4
+  val_batch_size: 1
+  workers: 4
+  val_workers: 1
+  train_jsonl: data/dataset/depth_cache/train.jsonl
+  val_jsonl: data/dataset/depth_cache/val.jsonl
+
+# =============================================================================
+# 3. GLOBAL FALLBACK PROMPT
+# =============================================================================
+prompt: null   # null -> each image uses its own prompt from the manifest
+
+# =============================================================================
+# 4. OPERATIONAL SETTINGS
+# =============================================================================
+seed: 42
+val_batches: 4
+n_grid_images: 4
+
+# =============================================================================
+# 5. PRECISION
+# =============================================================================
+# bf16 is hardcoded on the Accelerator in train_depth.py, not a config knob.
+ignore_check: true
+tag: depth   # outputs/train/depth/...
+
+# =============================================================================
+# 6. MODEL OVERRIDES
+# =============================================================================
+model:
+  _target_: src.model.SD15
+  pipeline_type: diffusers.StableDiffusionPipeline
+  model_name: ${base_model_name}   # train_depth.py overrides to base_model_path when local
+  local_files_only: ${local_files_only}
+  guidance_scale: 7.5
+
+# =============================================================================
+# 7. LORA ARCHITECTURE
+# =============================================================================
+# NewStructLoRAConv UNMODIFIED -- no GroupNorm (§5 of the architecture doc:
+# depth is smooth/continuous, doesn't have the failure mode that motivated
+# the seg branches' GroupNorm, and the released depth checkpoint was trained
+# without it).
+lora:
+  struct:
+    optimize: true
+    cfg: false
+    ckpt_path: null   # set to resume, e.g. "outputs/train/depth/runs/.../checkpoint-2000"
+    encoder:
+      _target_: torch.nn.Identity
+    config:
+      adaption_mode: only_res_conv
+      rank: 64          # not 128 -- 50K same-route custom data, overfitting is the risk (§6)
+      c_dim: 128
+      lora_cls: NewStructLoRAConv
+      lora_scale: 1
+
+# LAUNCH:
+#   Single GPU : python train_depth.py experiment=train_depth
+#   Multi-GPU  : accelerate launch --num_processes=N train_depth.py experiment=train_depth

@@ -1,0 +1,10 @@
+defaults:
+  - _self_
+
+_target_: src.data.local_depth.DepthJsonDataModule
+train_jsonl: ???
+val_jsonl: ???
+batch_size: 4
+val_batch_size: 1
+workers: 4
+val_workers: 1
