@@ -407,7 +407,11 @@ def main(cfg):
     # BEFORE generating, so even a crashed run leaves its recipe behind.   #
     # ------------------------------------------------------------------ #
     _inf = cfg.inference
-    _params_lines = [
+    # Shared generation-setting lines only -- no per-entry listing here. This
+    # same block gets reused for each image's own per-folder params file
+    # below (see _per_image_params_text), so it's kept separate from the
+    # whole-run entry dump on purpose.
+    _settings_lines = [
         "grounded_sam_inference.py run parameters",
         f"timestamp                    : {datetime.now().isoformat(timespec='seconds')}",
         f"ckpt_path                    : {cfg.ckpt_path}",
@@ -424,16 +428,27 @@ def main(cfg):
         f"base model                   : {_base_model_name}",
         f"input mode                   : {'json_file: ' + str(_inf.json_file) if _inf.get('json_file') else 'direct seg_maps list'}",
         f"entries                      : {len(entries)}",
-        "",
-        "inputs (seg_path | raw_image_path | prompt):",
     ]
+
+    def _per_image_params_text(entry: dict) -> str:
+        """Same run-level settings, plus THIS image's own path/prompt only --
+        not the whole batch's entry listing. Works identically whether this
+        run processed one image or a thousand: every image's own folder is
+        self-documenting on its own, independent of the others."""
+        lines = list(_settings_lines) + [
+            "",
+            f"seg_path                     : {entry['seg_path']}",
+            f"raw_image_path               : {entry.get('image_path') or '-'}",
+            f"prompt                       : {entry.get('prompt', '')!r}",
+        ]
+        return "\n".join(lines) + "\n"
+
+    _run_params_lines = list(_settings_lines) + ["", "inputs (seg_path | raw_image_path | prompt):"]
     for e_ in entries:
-        _params_lines.append(
+        _run_params_lines.append(
             f"  {e_['seg_path']} | {e_.get('image_path') or '-'} | {e_.get('prompt', '')!r}"
         )
-    (output_dir / "run_params.txt").write_text(
-        "\n".join(_params_lines) + "\n", encoding="utf-8"
-    )
+    (output_dir / "run_params.txt").write_text("\n".join(_run_params_lines) + "\n", encoding="utf-8")
     print(f"[params] wrote {output_dir / 'run_params.txt'}")
 
     # ------------------------------------------------------------------ #
@@ -579,30 +594,53 @@ def main(cfg):
         for k, (pred_pil, raw_pred_pil) in enumerate(zip(preds, raw_preds)):
             suffix = f"_{k}" if len(preds) > 1 else ""
 
+            # Real manifests store seg_path as an ABSOLUTE path (verified against
+            # data/dataset/extracted_seg_map_grounded_sam/train.jsonl) -- joining
+            # output_dir with an absolute rel.parent doesn't nest it, it DISCARDS
+            # output_dir entirely (Path.__truediv__ with an absolute right operand
+            # returns the right operand as-is, same behavior as os.path.join).
+            # That silently wrote every run's debug images into
+            # data/dataset/extracted_seg_map_grounded_sam/ itself -- outside any
+            # timestamped output_dir, shared and flat across EVERY run regardless
+            # of when it ran, so a later run's images overwrite an earlier run's
+            # for any image processed by both. This is almost certainly the actual
+            # "images overlapping / losing images" bug -- not a same-run collision.
+            # Fix: use only the parent folder's NAME (a plain string, never
+            # absolute) for light disambiguation, so the join can never escape
+            # output_dir no matter what the source manifest's paths look like.
+            rel = Path(entry["seg_path"])
+            sample_dir = output_dir / rel.parent.name
+            sample_dir.mkdir(parents=True, exist_ok=True)
+            # This image's own path/prompt/settings, alongside its outputs --
+            # so this one folder is self-documenting on its own (what generated
+            # it, from what input) whether this run processed a single image or
+            # a whole batch. Idempotent (same text every time for this entry),
+            # so writing it once per entry here even when n_samples>1 revisits
+            # the same sample_dir is harmless.
+            (sample_dir / "params.txt").write_text(_per_image_params_text(entry), encoding="utf-8")
+
             if save_generated_only:
-                # Mirror the exact path from the JSON so folder structure is preserved.
-                rel = Path(entry["seg_path"])
-                out_path = output_dir / rel.parent / f"{rel.stem}{suffix}{rel.suffix}"
-                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path = sample_dir / f"{rel.stem}{suffix}{rel.suffix}"
                 pred_pil.resize(_target_wh).save(out_path, quality=95)
                 print(f"  -> {out_path}")
             else:
                 # Full debug output: 4-panel grid + individual panels.
+
                 grid = make_seg_inference_grid(orig_display, seg_pil, pred_pil, raw_pred_pil, size)
-                grid_path = output_dir / f"{stem}{suffix}_grid.jpg"
+                grid_path = sample_dir / f"{stem}{suffix}_grid.jpg"
                 grid.save(grid_path, quality=95)
 
                 orig_display.save(
-                    output_dir / f"{stem}_original.jpg"
+                    sample_dir / f"{stem}_original.jpg"
                 )
                 seg_pil.resize(_target_wh).convert("RGB").save(
-                    output_dir / f"{stem}_seg.jpg"
+                    sample_dir / f"{stem}_seg.jpg"
                 )
                 pred_pil.resize(_target_wh).save(
-                    output_dir / f"{stem}{suffix}_predicted.jpg", quality=95
+                    sample_dir / f"{stem}{suffix}_predicted.jpg", quality=95
                 )
                 raw_pred_pil.resize(_target_wh).save(
-                    output_dir / f"{stem}{suffix}_raw_seg_gen.jpg", quality=95
+                    sample_dir / f"{stem}{suffix}_raw_seg_gen.jpg", quality=95
                 )
                 print(f"  -> {grid_path}")
 
