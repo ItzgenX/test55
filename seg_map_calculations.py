@@ -499,7 +499,7 @@ def build_segmentation_training_jsons(
     data_dir: Path,
     raw_dir: Path,
     seg_dir: Path,
-    output_dir: Path,
+    manifest_out: Path = None,
     size: int = 512,
     batch_size: int = 4,
     model_name: str = DEFAULT_SEG_MODEL,
@@ -510,17 +510,33 @@ def build_segmentation_training_jsons(
     image_path: str = "source",
     image_root: Path = None,
     resize_mode: str = "aspect",
+    output_root: Path = None,
 ) -> None:
     """
     Build data/seg_training/{train,val,test}.jsonl from data/{train,val,test}.jsonl.
 
-    This is the --data_dir path. It behaves IDENTICALLY to --dataset_dir scan
-    mode in where it saves maps (twin of depth's build_depth_training_jsons): it
-    does NOT hardcode an output folder. It looks at the image paths in your
-    JSONLs, finds the folder common to all of them (the dataset root, e.g.
-    .../custome_dataset), and saves each map into a SIBLING folder next to it
-    (.../custome_dataset_seg_map/), mirroring the internal structure. So every
-    image gets its OWN uniquely-named map and none can overwrite another.
+    This is the --data_dir path. By default it does NOT hardcode an output
+    folder for the maps: it looks at the image paths in your JSONLs, finds the
+    folder common to all of them (the dataset root, e.g. .../custome_dataset),
+    and saves each map into a SIBLING folder next to it
+    (.../custome_dataset_seg_map_<resize_mode>/), mirroring the internal
+    structure. So every image gets its OWN uniquely-named map and none can
+    overwrite another. Pass output_root to redirect the PNGs somewhere else
+    entirely instead (mirrors grounded_sam_map_calculations.py's own
+    --output_root override) -- the manifest's seg_path values follow
+    automatically, since they're built from wherever the maps actually landed.
+
+    manifest_out controls where train/val/test.jsonl are written, independent
+    of where the PNGs go -- same two-knob split as
+    grounded_sam_map_calculations.py's --output_root/--manifest_out. If
+    omitted, defaults to wherever the PNGs actually landed (output_root, or
+    its own sibling-of-data_dir default), matching grounded_sam's default
+    exactly -- resolved AFTER the PNG location is known (unlike
+    grounded_sam's own main(), which can resolve output_root before calling
+    its build function since it never needs to actually scan real images to
+    do so; this branch's sibling default depends on the real images
+    referenced in the manifest, so the same resolution has to happen here
+    instead).
 
     Steps:
       0. Read every split's entries + resolve absolute image paths (in lockstep,
@@ -537,7 +553,8 @@ def build_segmentation_training_jsons(
 
     Args:
       data_dir         : folder with train.jsonl / val.jsonl / test.jsonl.
-      output_dir       : where the three-field manifests are written (data/seg_training/).
+      manifest_out     : where the three-field manifests are written. None
+                         (default) = same folder the PNGs landed in.
       image_path       : key in the source JSONL holding the image path (e.g. "target").
       image_root       : optional root prepended to RELATIVE image paths.
       subset_n         : if set, only the first N entries per split (dry run).
@@ -546,7 +563,6 @@ def build_segmentation_training_jsons(
                          stays backward-compatible.
     """
     cwd = Path.cwd()
-    output_dir.mkdir(parents=True, exist_ok=True)
     _root = image_root if image_root is not None else cwd
 
     # ---- Step 0: read all splits, resolve images, find ONE dataset root ---- #
@@ -602,10 +618,32 @@ def build_segmentation_training_jsons(
         if dataset_root.is_file():          # only one image -> commonpath is the file itself
             dataset_root = dataset_root.parent
     _suffix = f"_seg_map_{resize_mode}"
-    sibling_root = dataset_root.parent / (dataset_root.name + _suffix)
+    # Explicit output_root wins outright (resolved, same reasoning as
+    # grounded_sam_map_calculations.py's own --output_root: a relative path
+    # left unresolved would inherit whatever the process cwd happens to be
+    # when segformer_training.py's hydra.job.chdir=true later changes it,
+    # breaking Image.open(seg_path) on the very first batch). Otherwise fall
+    # back to the sibling-of-dataset-root default, unchanged from before.
+    if output_root is not None:
+        sibling_root = Path(output_root).resolve()
+    else:
+        sibling_root = dataset_root.parent / (dataset_root.name + _suffix)
     sibling_root.mkdir(parents=True, exist_ok=True)
     print(f"\nDataset root : {dataset_root}")
-    print(f"Seg maps     : {sibling_root}  (sibling folder, mirrored structure, resize_mode={resize_mode})")
+    print(f"Seg maps     : {sibling_root}  (resize_mode={resize_mode})"
+          + ("" if output_root is not None else "  (sibling folder, mirrored structure)"))
+
+    # manifest_out: explicit value wins outright (resolved, same reasoning as
+    # output_root above); otherwise defaults to sibling_root itself -- the
+    # SAME folder the PNGs just landed in -- matching
+    # grounded_sam_map_calculations.py's own manifest_out-defaults-to-
+    # output_root behavior exactly. Only resolvable here, not earlier in
+    # main(), since sibling_root itself depends on the real images this
+    # manifest references (see the docstring's note on this).
+    manifest_root = Path(manifest_out).resolve() if manifest_out is not None else sibling_root
+    manifest_root.mkdir(parents=True, exist_ok=True)
+    print(f"Manifest     : {manifest_root}"
+          + ("" if manifest_out is not None else "  (same folder as the seg maps)"))
 
     # STEM-based naming (mirrors run_json_file_mode's own _out_path), NOT
     # _sibling_map_path's folder-based naming (that one stays as-is -- it's
@@ -679,7 +717,7 @@ def build_segmentation_training_jsons(
                 "ground_truth":   _gt,
             })
 
-        out_path = output_dir / f"{split}.jsonl"
+        out_path = manifest_root / f"{split}.jsonl"
         with open(out_path, "w", encoding="utf-8") as f:
             for entry in out_entries:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -1248,12 +1286,35 @@ def main():
     )
     parser.add_argument(
         "--seg_dir", type=str, default=None,
-        help="Where to save seg-ID PNGs (default: <data_dir>/raw_seg).",
+        help="Legacy, --data_dir mode only: NOT used for saving (kept for CLI "
+             "backward-compatibility). Use --output_root to redirect where the "
+             "seg-ID PNGs actually go.",
+    )
+    parser.add_argument(
+        "--output_root", type=str, default=None,
+        help="--data_dir mode only: where to save the seg-ID PNGs themselves "
+             "(mirrors grounded_sam_map_calculations.py's --output_root). "
+             "Default (if omitted): a SIBLING of --data_dir, suffixed "
+             "'_seg_map_<resize_mode>' -- e.g. --data_dir data/custome_dataset "
+             "-> data/custome_dataset_seg_map_aspect. Pass this to save maps "
+             "somewhere else entirely (a different disk/mount, a shared "
+             "location, etc.) without changing --data_dir.",
     )
     parser.add_argument(
         "--output_dir", type=str, default=None,
-        help="Output dir for the JSONLs (default: <data_dir>/seg_training) "
-             "or for PNGs in --input_dir mode.",
+        help="--input_dir mode ONLY: where to save the scanned PNGs "
+             "(default: <input_dir's parent>/raw_seg_<resize_mode>). "
+             "--data_dir/--dataset_dir modes use --output_root/--manifest_out instead.",
+    )
+    parser.add_argument(
+        "--manifest_out", type=str, default=None,
+        help="--data_dir/--dataset_dir modes: where to write train/val/test.jsonl "
+             "(mirrors grounded_sam_map_calculations.py's --manifest_out). "
+             "--data_dir mode default (if omitted): the SAME folder the seg-ID "
+             "PNGs landed in (--output_root, or its own sibling-of-data_dir "
+             "default) -- matching grounded_sam exactly. --dataset_dir scan mode "
+             "default: <data_dir>/seg_training_<resize_mode> (unchanged, no "
+             "grounded_sam equivalent to match for that mode).",
     )
     parser.add_argument(
         "--input_dir", type=str, default=None,
@@ -1504,8 +1565,11 @@ def main():
         # resize_mode values would silently OVERWRITE the first run's
         # train/val/test.jsonl with the second's, even though the PNG maps
         # themselves are correctly mode-separated (sibling folder). An
-        # explicit --output_dir is trusted as-is.
-        out_dir = (Path(args.output_dir).resolve() if args.output_dir
+        # explicit --manifest_out is trusted as-is. No grounded_sam
+        # equivalent for THIS mode (scan mode has none), so this default
+        # stays its own established formula rather than switching to
+        # "same folder as the PNGs" the way --data_dir mode below does.
+        out_dir = (Path(args.manifest_out).resolve() if args.manifest_out
                    else data_dir / f"seg_training_{args.resize_mode}")
 
         if not dataset_dir.exists():
@@ -1533,18 +1597,21 @@ def main():
         data_dir  = Path(args.data_dir).resolve()
         raw_dir   = Path(args.raw_dir).resolve()   if args.raw_dir  else data_dir / "raw"
         seg_dir   = Path(args.seg_dir).resolve()   if args.seg_dir  else data_dir / "raw_seg"
-        # output_dir: data/seg_training_<mode>/ — mode-named for the same
-        # collision-avoidance reason as scan mode above.
-        out_dir   = (Path(args.output_dir).resolve() if args.output_dir
-                    else data_dir / f"seg_training_{args.resize_mode}")
         if args.dry_run_n:
             print(f"\n[DRY RUN] First {args.dry_run_n} entries per JSON.")
         image_root = Path(args.image_root).resolve() if args.image_root else None
         if image_root:
             print(f"Image root : {image_root}  (prepended to relative image paths)")
+        # output_root/manifest_out resolved to actual paths INSIDE
+        # build_segmentation_training_jsons (None passed through as-is means
+        # "use the default") -- unlike scan mode above, this mode's default
+        # sibling location can't be computed here in main() without first
+        # scanning the real images the manifest references (see that
+        # function's own docstring), so there's nothing to pre-resolve.
         build_segmentation_training_jsons(
             data_dir=data_dir, raw_dir=raw_dir if args.raw_dir else (image_root or data_dir / "raw"),
-            seg_dir=seg_dir, output_dir=out_dir,
+            seg_dir=seg_dir,
+            manifest_out=Path(args.manifest_out).resolve() if args.manifest_out else None,
             size=args.size, batch_size=args.batch_size, model_name=args.model,
             device=args.device,
             skip_existing=not args.no_skip, subset_n=args.dry_run_n,
@@ -1552,6 +1619,7 @@ def main():
             image_path=args.image_path,
             image_root=image_root,
             resize_mode=args.resize_mode,
+            output_root=Path(args.output_root).resolve() if args.output_root else None,
         )
     else:
         run_seg_directory_mode(args)
