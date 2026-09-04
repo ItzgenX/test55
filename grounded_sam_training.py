@@ -197,11 +197,24 @@ def _gsam_target_ids_native(seg_ids: torch.Tensor) -> torch.Tensor:
 
 
 def _save_checkpoint_grounded_sam_images(
-    model, val_dataset, idxs, kinds, n_loras, cfg, cfg_mask, device, out_dir, include_empty, palette
+    model, val_dataset, idxs, kinds, n_loras, cfg, cfg_mask, device, out_dir, include_empty, palette,
+    info_lines=None,
 ):
     """Generate + save the monitoring images for one checkpoint into out_dir
     (the SAME folder as that checkpoint's weights). One labeled file per
-    scene, plus a single prompts.txt. Returns (prompts, [np_images], metrics).
+    scene, plus prompts.txt AND info.txt together, always -- previously
+    info.txt was only written for best_model (a separate, external write,
+    gated on is_best), so every OTHER checkpoint's images had no info.txt
+    at all, and prompts/info could never be relied on to be found together.
+    Now every call writes both, unconditionally, right next to each other.
+
+    info_lines: caller-supplied context (stem/epoch/step/timestamp/loss --
+    whatever's known at that call site). Never required -- if omitted, a
+    minimal info.txt (out_dir name + timestamp + scene count) is still
+    written, so info.txt is never silently missing. This function's own
+    mIoU metrics (when computed) are always appended, regardless of what
+    the caller passed -- callers no longer need to merge those in
+    themselves. Returns (prompts, [np_images], metrics).
 
     Mirrors segformer_training.py's _save_checkpoint_segmentation_images
     structurally (fixed+fresh scene split, per-scene labeled image, metrics
@@ -284,6 +297,16 @@ def _save_checkpoint_grounded_sam_images(
         print("[grounded_sam grid] mIoU skipped -- configured encoder has no live "
               "inference path (lora.struct.encoder is Identity). Swap to "
               "configs/lora/encoder/grounded_sam.yaml for live mIoU scoring.")
+
+    # info.txt ALWAYS written, right next to prompts.txt -- see docstring.
+    _info = list(info_lines) if info_lines else [
+        f"out_dir:     {out_dir}",
+        f"timestamp:   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"n_scenes:    {len(idxs)}",
+    ]
+    _info += [f"{k}: {v:.4f}" for k, v in metrics.items()]
+    (out_dir / "info.txt").write_text("\n".join(_info), encoding="utf-8")
+
     return prompts, images, metrics
 
 
@@ -596,16 +619,26 @@ def main(cfg):
             idxs = list(_fixed_val_idxs) + new_idxs
             kinds = ["fixed"] * len(_fixed_val_idxs) + ["new"] * len(new_idxs)
 
+            # Regular (non-best) checkpoints previously called this with no
+            # info_lines at all, so they never got an info.txt (only
+            # best_model did, via the now-removed separate write below).
+            # Build a baseline here so EVERY checkpoint's info.txt has at
+            # least stem/epoch/step/timestamp -- callers with richer info
+            # (e.g. do_grounded_sam_validation's val/loss on a new best)
+            # still pass their own info_lines through, taking precedence.
+            _default_info = info_lines or [
+                f"stem:        {stem}",
+                f"epoch:       {epoch + 1}",
+                f"global_step: {global_step}",
+                f"timestamp:   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"resize_mode: {cfg.get('resize_mode', 'aspect')}",
+            ]
+
             with torch.no_grad():
                 prompts, images, metrics = _save_checkpoint_grounded_sam_images(
                     model, dm.val_dataset, idxs, kinds, n_loras, cfg, cfg_mask,
                     accelerator.device, ckpt_dir, include_empty, _display_palette,
-                )
-
-            if is_best:
-                metric_lines = [f"{k}: {v:.4f}" for k, v in metrics.items()]
-                (ckpt_dir / "info.txt").write_text(
-                    "\n".join((info_lines or []) + metric_lines), encoding="utf-8"
+                    info_lines=_default_info,
                 )
 
             for tracker in accelerator.trackers:
