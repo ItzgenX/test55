@@ -176,6 +176,19 @@ def main():
     p.add_argument("--image_path", default="raw_image_path")
     p.add_argument("--dry_run_n", type=int, default=None)
     p.add_argument("--no_skip_existing", action="store_true")
+    p.add_argument(
+        "--output_root", type=str, default=None,
+        help="Where to save the seg-ID PNGs (mirrors seg_map_calculations.py's "
+             "own --output_root / grounded_sam_map_calculations.py's --output_root). "
+             "Default (if omitted): a SIBLING of --data_dir, suffixed "
+             "'_seg_map_aspect'.",
+    )
+    p.add_argument(
+        "--manifest_out", type=str, default=None,
+        help="Where to write train/val/test.jsonl (mirrors seg_map_calculations.py's "
+             "own --manifest_out). Default (if omitted): the SAME folder the "
+             "seg-ID PNGs landed in (--output_root, or its own sibling default).",
+    )
     args = p.parse_args()
 
     _log_path = _setup_logging(PROJECT_ROOT / "outputs" / "logs")
@@ -207,10 +220,15 @@ def main():
         data_dir, raw_dir, args.image_path, args.dry_run_n,
     )
     suffix = "_seg_map_aspect"
-    sibling_root = dataset_root.parent / (dataset_root.name + suffix)
+    # Explicit --output_root wins outright (resolved, same reasoning as
+    # seg_map_calculations.py's own --output_root): otherwise the existing
+    # sibling-of-dataset_root default, unchanged.
+    sibling_root = (Path(args.output_root).resolve() if args.output_root
+                     else dataset_root.parent / (dataset_root.name + suffix))
     sibling_root.mkdir(parents=True, exist_ok=True)
     logger.info(f"  Dataset root : {dataset_root}")
-    logger.info(f"  Seg maps     : {sibling_root}")
+    logger.info(f"  Seg maps     : {sibling_root}"
+                + ("" if args.output_root else "  (sibling folder, mirrored structure)"))
 
     def out_fn(img: Path) -> Path:
         rel_dir = img.parent.relative_to(dataset_root)
@@ -290,8 +308,14 @@ def main():
 
     # ---- write + verify unified manifests ----
     split_counts = {}
-    out_dir = data_dir / "seg_training_aspect"
+    # manifest_out: explicit value wins outright; otherwise defaults to
+    # sibling_root itself -- the SAME folder the PNGs just landed in --
+    # matching seg_map_calculations.py's --data_dir mode default (which in
+    # turn matches grounded_sam_map_calculations.py's own default) exactly.
+    out_dir = (Path(args.manifest_out).resolve() if args.manifest_out else sibling_root)
     out_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"  Manifest     : {out_dir}"
+                + ("" if args.manifest_out else "  (same folder as the seg maps)"))
     for split, entries in split_entries.items():
         imgs = split_images[split]
         out_entries = []
