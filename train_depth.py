@@ -426,14 +426,30 @@ def main(cfg):
             img_b = sample["jpg"].unsqueeze(0).to(accelerator.device)
             depth_b = sample["depth"].unsqueeze(0).to(accelerator.device)
             prompt = sample["caption"]
+            # No skip_encode (SD15.sample()->sample_easy() has no such
+            # parameter -- it always calls encoder(c) unconditionally;
+            # harmless to omit since the wired encoder is torch.nn.Identity()
+            # anyway). height/width MUST be passed explicitly -- without
+            # them diffusers falls back to SD1.5's default 512x512 sample
+            # size, which doesn't match the depth conditioning maps' actual
+            # 1280x768 resolution and crashes inside NewStructLoRAConv's
+            # FiLM modulation with a real shape mismatch. Both found by
+            # actually running this function end-to-end against a real
+            # checkpoint (inference_depth.py hit the identical pair first),
+            # not by reading the code -- this would have crashed the very
+            # first checkpoint-monitoring image any real training run tried
+            # to generate; the earlier training-loop verification only
+            # exercised forward_easy() (the loss path), never this sampling
+            # path, so it went undetected until now.
             preds = model.sample(
                 prompt=[prompt],
                 num_images_per_prompt=1,
                 cs=[depth_b],
                 generator=generator,
                 cfg_mask=[True],
-                skip_encode=True,
                 num_inference_steps=30,
+                height=cfg.size[1],
+                width=cfg.size[0],
             )
             rows.append(make_grid_row(sample["jpg"], sample["depth"], preds[0]))
             prompts.append(prompt)

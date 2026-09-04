@@ -7,10 +7,10 @@
 #   python inference_depth.py ckpt_path=<checkpoint dir> inference.json_file=data/dataset/depth_cache/val.jsonl
 
 defaults:
-  - /model: sdxl
+  - /model: sd15
   - /lora@lora.struct: struct
   - override /lora/encoder@lora.struct.encoder: identity
-  - override /lora/mapper_network@lora.struct.mapper_network: dsmXL
+  - override /lora/mapper_network@lora.struct.mapper_network: fsm15
   - _self_
 
 device: null  # null -> auto-detect a GPU; "cpu" to opt in explicitly
@@ -18,26 +18,26 @@ size: [1280, 768]  # (width, height) -- the one working resolution, always
 seed: 42
 local_files_only: false
 
-base_model_path: checkpoints/local_models/stable-diffusion-xl-base-1.0
-base_model_name: stabilityai/stable-diffusion-xl-base-1.0
+# SD1.5, not SDXL -- matches train_depth.yaml's switch (see that file's own
+# comment for the full reasoning: the original repo's own released
+# checkpoint is SD1.5, and 1280x768 is already exactly divisible by 64).
+base_model_path: checkpoints/local_models/stable-diffusion-v1-5
+base_model_name: runwayml/stable-diffusion-v1-5
 midas_model_path: checkpoints/local_models/dpt-hybrid-midas
 midas_model_name: Intel/dpt-hybrid-midas
-vae_local_path: checkpoints/local_models/sdxl-vae-fp16-fix
 
-time_ids:
-  original_size: [800, 1280]
-  crops_coords_top_left: [16, 0]
-  target_size: [768, 1280]
+# No time_ids block, no vae_local_path/model.vae_path override: both were
+# SDXL-only (time_ids = SDXL's micro-conditioning mechanism, which SD1.5 has
+# no equivalent of at all; the VAE fp16 fix was only ever needed for SDXL's
+# own numerically-unstable baked-in VAE). Dropped along with the model
+# switch above, not overlooked -- see train_depth.yaml's identical change.
 
 ckpt_path: ???
 
 # Domain LoRA (DEPTH-BRANCH-architecture.md §7) -- plain unconditional LoRA,
 # fused into the base UNet BEFORE add_lora_from_config wires the depth
-# adapter in. null -> skip (use base SDXL prior as-is).
+# adapter in. null -> skip (use base SD1.5 prior as-is).
 domain_lora_path: null
-
-model:
-  vae_path: madebyollin/sdxl-vae-fp16-fix
 
 lora:
   struct:

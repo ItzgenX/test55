@@ -41,8 +41,8 @@ import torch
 from PIL import Image
 
 from compute_depth import DepthPrecomputer, WORKING_SIZE, load_depth
-from src.mapper_network import DepthStructureMapperXL
-from src.model import SDXL
+from src.mapper_network import FixedStructureMapper15
+from src.model import SD15
 from src.utils import DataProvider
 
 PROJECT_ROOT = Path(os.path.abspath(__file__)).parent
@@ -56,8 +56,8 @@ def resolve_device(cfg_device):
 
 def build_model(cfg, device):
     model_name = cfg.base_model_path if cfg.local_files_only else cfg.base_model_name
-    model = SDXL(
-        pipeline_type="diffusers.StableDiffusionXLPipeline",
+    model = SD15(
+        pipeline_type="diffusers.StableDiffusionPipeline",
         model_name=model_name,
         local_files_only=cfg.local_files_only,
         guidance_scale=cfg.inference.guidance_scale,
@@ -67,7 +67,7 @@ def build_model(cfg, device):
     return model
 
 
-def fuse_domain_lora(model: SDXL, domain_lora_path: str | None):
+def fuse_domain_lora(model: SD15, domain_lora_path: str | None):
     if not domain_lora_path:
         return
     print(f"fusing domain LoRA from {domain_lora_path} (must happen before add_lora_to_unet)")
@@ -75,25 +75,26 @@ def fuse_domain_lora(model: SDXL, domain_lora_path: str | None):
     model.pipe.fuse_lora()
 
 
-def wire_depth_lora(model: SDXL, cfg, ckpt_path: Path, device):
-    mapper = DepthStructureMapperXL(c_dim=cfg.lora.struct.config.c_dim).to(device)
+def wire_depth_lora(model: SD15, cfg, ckpt_path: Path, device):
+    mapper = FixedStructureMapper15(c_dim=cfg.lora.struct.config.c_dim).to(device)
     dp = DataProvider()
 
-    class_config = dict(cfg.lora.struct.config)
-    lora_cls = class_config.pop("lora_cls")
-    adaption_mode = class_config.pop("adaption_mode")
-
-    class Cfg:
-        pass
-
-    lora_cfg = Cfg()
-    lora_cfg.lora_cls = lora_cls
-    lora_cfg.adaption_mode = adaption_mode
-    for k, v in class_config.items():
-        setattr(lora_cfg, k, v)
-
+    # add_lora_to_unet needs an object that supports BOTH attribute access
+    # (config.lora_cls, config.rank -- src/model.py:162-163,169) AND dict
+    # unpacking (class_config = {**config}, per-layer inside its own loop --
+    # src/model.py:172) on the SAME object. cfg.lora.struct.config (a real
+    # Hydra/OmegaConf DictConfig) already supports both natively -- pass it
+    # straight through. The previous code here rebuilt a plain custom class
+    # instance via setattr(), which supports attribute access but NOT **
+    # unpacking, so add_lora_to_unet's "{**config}" would always raise
+    # "object is not a mapping" -- a real, pre-existing bug independent of
+    # the SDXL/SD1.5 switch, found by actually running this function against
+    # a real checkpoint, not by reading the code. It was also unnecessary:
+    # add_lora_to_unet already deep-copies + strips lora_cls/adaption_mode
+    # itself on every iteration (src/model.py:172-174), so the caller never
+    # needed to pre-strip them either.
     model.add_lora_to_unet(
-        lora_cfg,
+        cfg.lora.struct.config,
         name="struct",
         data_provider=dp,
         encoder=torch.nn.Identity(),
@@ -110,7 +111,7 @@ def wire_depth_lora(model: SDXL, cfg, ckpt_path: Path, device):
     return mapper, dp
 
 
-def set_lora_scale(model: SDXL, scale: float):
+def set_lora_scale(model: SD15, scale: float):
     for layer in model.lora_layers["struct"]:
         layer.lora_scale = scale
 
@@ -211,14 +212,32 @@ def main(cfg):
         depth_3ch = torch.from_numpy(depth_arr).float().unsqueeze(0).repeat(3, 1, 1).unsqueeze(0).to(device)
 
         generator = torch.Generator(device=device).manual_seed(cfg.seed)
+        # No skip_encode here: SD15.sample() -> sample_easy() has no such
+        # parameter at all (unlike SDXL.forward()/sample()) -- it always
+        # calls encoder(c) unconditionally. Passing skip_encode=True would
+        # fall into sample_easy's **kwargs and leak straight into the
+        # underlying diffusers pipeline call, which doesn't accept it
+        # either -- a real crash, not just a no-op. Harmless to omit here
+        # since the wired encoder is torch.nn.Identity() (encoder(c) == c
+        # regardless), matching wire_depth_lora's own encoder=Identity().
+        # height/width MUST be passed explicitly -- without them, diffusers
+        # falls back to the UNet's own default sample_size (512x512 for
+        # SD1.5), which doesn't match the depth conditioning maps' actual
+        # 1280x768 resolution and crashes inside NewStructLoRAConv's FiLM
+        # modulation with a real shape mismatch ("size of tensor a (64)
+        # must match tensor b (160)"). Found by actually running this
+        # function end-to-end against a real checkpoint, not by reading the
+        # code -- this crashed every previous real inference attempt,
+        # independent of the SDXL/SD1.5 switch.
         preds = model.sample(
             prompt=[prompt],
             num_images_per_prompt=cfg.inference.n_samples,
             cs=[depth_3ch],
             generator=generator,
             cfg_mask=[True],
-            skip_encode=True,
             num_inference_steps=cfg.inference.num_inference_steps,
+            height=WORKING_SIZE[1],
+            width=WORKING_SIZE[0],
         )
 
         for j, pred in enumerate(preds):
