@@ -11,6 +11,17 @@ precompute) -- for --image/--json_file/--dataset_dir/--input_dir single-item
 or scan modes, use seg_map_calculations.py directly, single-GPU is already
 instant for those.
 
+Same INPUT/OUTPUT controls as seg_map_calculations.py's own --data_dir mode
+(mirrors grounded_sam_map_calculations_multi_GPU.py exactly): --train_jsonl/
+--val_jsonl/--test_jsonl override --data_dir's auto-discovery per split, or
+work standalone with no --data_dir at all (--output_root then required);
+--limit_train/--limit_val/--limit_test cap each split independently;
+--output_root/--manifest_out control the PNG/manifest locations
+independently, manifest defaulting to the same folder the PNGs landed in.
+No --rank/--world_size here -- this script already uses every GPU itself
+in one process; that flag pair is seg_map_calculations.py's own mechanism
+for SLURM-driven multi-task sharding instead.
+
 WHY THIS NEEDED MORE THAN A THIN WRAPPER (unlike grounded_sam's per-image
 design): seg_map_calculations.py's build_segmentation_training_jsons derives
 its shared output folder (dataset_root -> sibling_root) via
@@ -95,21 +106,37 @@ def _is_relative_to(p: Path, other: Path) -> bool:
         return False
 
 
-def _resolve_all_splits(data_dir, raw_dir, image_path_key, subset_n):
+def _resolve_all_splits(data_dir, raw_dir, image_path_key, subset_n, explicit_jsonl=None, limits=None):
     """Central, one-time resolution (parent process, before any worker
     starts): read every split's entries, resolve absolute image paths, pool
     them ALL to derive ONE dataset_root/sibling_root -- see module docstring
-    for why this must happen once, not per-worker."""
+    for why this must happen once, not per-worker.
+
+    explicit_jsonl: optional {"train"/"val"/"test": Path} -- overrides
+    data_dir's auto-discovery for that split, or works standalone with
+    data_dir=None. limits: optional {"train"/"val"/"test": int|None} --
+    per-split cap, overriding subset_n for that split. Both mirror
+    grounded_sam_map_calculations_multi_GPU.py's own
+    --train_jsonl/--val_jsonl/--test_jsonl and
+    --limit_train/--limit_val/--limit_test."""
+    explicit_jsonl = explicit_jsonl or {}
+    limits = limits or {}
     split_entries, split_images, all_images = {}, {}, []
     for split in ("train", "val", "test"):
-        src = _find_split_jsonl(data_dir, split)
+        if explicit_jsonl.get(split) is not None:
+            src = Path(explicit_jsonl[split])
+        elif data_dir is not None:
+            src = _find_split_jsonl(data_dir, split)
+        else:
+            src = None
         if src is None:
             logger.warning(f"no jsonl for split '{split}' -- skipping")
             continue
+        _split_limit = limits.get(split, subset_n)
         with open(src, "r", encoding="utf-8") as f:
             entries = [json.loads(line) for line in f if line.strip()]
-        if subset_n:
-            entries = entries[:subset_n]
+        if _split_limit:
+            entries = entries[:_split_limit]
         abs_paths = []
         for entry in entries:
             p = Path(_get_image_path(entry, image_path_key))
@@ -166,7 +193,19 @@ def _gpu_worker(gpu_id, shard, out_paths, sibling_root, width, height, model_nam
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--data_dir", required=True)
+    p.add_argument("--data_dir", default=None,
+                    help="Folder with train.jsonl/val.jsonl/test.jsonl. "
+                         "--train_jsonl/--val_jsonl/--test_jsonl override this per split, "
+                         "or work standalone with no --data_dir at all.")
+    p.add_argument("--train_jsonl", default=None,
+                    help="Explicit path for the train split -- overrides --data_dir's "
+                         "auto-discovery for it, or works standalone with no --data_dir "
+                         "at all (--output_root is then required).")
+    p.add_argument("--val_jsonl", default=None, help="Explicit path for the val split.")
+    p.add_argument("--test_jsonl", default=None, help="Explicit path for the test split.")
+    p.add_argument("--limit_train", type=int, default=None, help="Cap on train images.")
+    p.add_argument("--limit_val", type=int, default=None, help="Cap on val images.")
+    p.add_argument("--limit_test", type=int, default=None, help="Cap on test images.")
     p.add_argument("--raw_dir", default=None)
     p.add_argument("--width", type=int, default=1280)
     p.add_argument("--height", type=int, default=800)
@@ -193,6 +232,14 @@ def main():
 
     _log_path = _setup_logging(PROJECT_ROOT / "outputs" / "logs")
 
+    _explicit_split_jsonl = bool(args.train_jsonl or args.val_jsonl or args.test_jsonl)
+    if not args.data_dir and not _explicit_split_jsonl:
+        p.error("Need --data_dir, or at least one of --train_jsonl/--val_jsonl/--test_jsonl.")
+    if _explicit_split_jsonl and not args.data_dir and not args.output_root:
+        p.error("--output_root is required when using --train_jsonl/--val_jsonl/--test_jsonl "
+                 "with no --data_dir -- explicit-paths-only mode has no dataset root to "
+                 "default a sibling seg-map folder from.")
+
     if args.width % 32 or args.height % 32:
         p.error(f"--width {args.width}/--height {args.height} must both be divisible by 32.")
 
@@ -208,7 +255,7 @@ def main():
     else:
         model_name = DEFAULT_SEG_MODEL
 
-    data_dir = Path(args.data_dir).resolve()
+    data_dir = Path(args.data_dir).resolve() if args.data_dir else None
     raw_dir = Path(args.raw_dir).resolve() if args.raw_dir else None
 
     logger.info("=" * 60)
@@ -216,8 +263,15 @@ def main():
     logger.info(f"  Size : {args.width}x{args.height}")
     logger.info("=" * 60)
 
+    _explicit_jsonl = {
+        "train": Path(args.train_jsonl).resolve() if args.train_jsonl else None,
+        "val": Path(args.val_jsonl).resolve() if args.val_jsonl else None,
+        "test": Path(args.test_jsonl).resolve() if args.test_jsonl else None,
+    }
+    _limits = {"train": args.limit_train, "val": args.limit_val, "test": args.limit_test}
     split_entries, split_images, dataset_root = _resolve_all_splits(
         data_dir, raw_dir, args.image_path, args.dry_run_n,
+        explicit_jsonl=_explicit_jsonl, limits=_limits,
     )
     suffix = "_seg_map_aspect"
     # Explicit --output_root wins outright (resolved, same reasoning as

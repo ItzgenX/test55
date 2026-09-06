@@ -44,6 +44,29 @@ TYPICAL WORKFLOW (data_dir mode — recommended, mirrors depth):
   # then train (same resize_mode):
   python segformer_training.py experiment=train_seg resize_mode=aspect
 
+--data_dir MODE'S INPUT/OUTPUT CONTROLS (mirrors grounded_sam_map_calculations.py exactly):
+  INPUT, one of two ways (mix freely, per split):
+    - --data_dir <folder>: auto-discovers <folder>/train.jsonl, val.jsonl,
+      test.jsonl. A split with no matching file is skipped, not an error.
+    - --train_jsonl / --val_jsonl / --test_jsonl <path>: pin a specific
+      split's manifest explicitly -- overrides --data_dir's auto-discovery
+      for that split, or works standalone with no --data_dir at all
+      (--output_root is then required).
+  OUTPUT: --output_root controls where the seg-ID PNGs are saved (default:
+    sibling of --data_dir); --manifest_out controls where train/val/test.jsonl
+    are written (default: the SAME folder the PNGs landed in).
+  PER-SPLIT LIMITS: --limit_train/--limit_val/--limit_test cap each split
+    independently (--dry_run_n applies the same cap to every OTHER mode instead).
+  MULTI-TASK/SLURM: --rank/--world_size shard the compute step across several
+    instances of this script, one per GPU (your sbatch script launches one
+    task per GPU, e.g. `srun --ntasks-per-node=4 ... --rank $SLURM_PROCID
+    --world_size $SLURM_NTASKS`). Each instance writes its OWN rank-suffixed
+    manifest (train_rank0.jsonl, train_rank1.jsonl, ...) and log file --
+    merge them yourself once every task is done, e.g. `cat train_rank*.jsonl
+    > train.jsonl`. Default rank=0/world_size=1 -- nothing changes for a
+    normal single-GPU run. See seg_map_calculations_multi_GPU.py instead for
+    a single in-process run that auto-detects and uses every GPU itself.
+
 QUICK COMMANDS (run from repo root with conda loradapter env active):
   # --- SINGLE IMAGE: one new CARLA/real-world photo -> map saved BESIDE it ---
   #     (<stem>_seg_map_<resize_mode>.png in the image's own folder; prints
@@ -134,14 +157,17 @@ class _Tee:
             s.flush()
 
 
-def _setup_logging(log_dir: Path) -> Path:
+def _setup_logging(log_dir: Path, rank: int | None = None) -> Path:
     """Mandatory console+file logging -- every run writes a timestamped log
     under outputs/logs/, mirroring grounded_sam_map_calculations.py's own
     mandatory-logging guarantee (see _Tee docstring for why the mechanism
-    differs here)."""
+    differs here). rank: when --data_dir mode's --world_size > 1, the log
+    file is rank-suffixed so parallel sbatch tasks never clobber each
+    other's log -- same convention as grounded_sam_map_calculations.py."""
     log_dir.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y%m%d_%H%M%S")
-    log_path = log_dir / f"{SCRIPT_NAME}_{ts}.log"
+    _suffix = f"_rank{rank}" if rank is not None else ""
+    log_path = log_dir / f"{SCRIPT_NAME}{_suffix}_{ts}.log"
     log_file = open(log_path, "w", encoding="utf-8")
     # stdout only, NOT stderr: tqdm's progress bar writes carriage-return
     # (\r) updates to stderr by default -- teeing that into a plain text
@@ -495,6 +521,14 @@ def _find_split_jsonl(data_dir: Path, split: str) -> "Path | None":
     return candidates[0] if candidates else None
 
 
+def _shard(items: list, rank: int, world_size: int) -> list:
+    """Round-robin split: this invocation gets items[rank::world_size].
+    world_size=1 (default) returns the list unchanged -- nothing changes for
+    a normal single-GPU run. Mirrors
+    grounded_sam_map_calculations.py's own _shard exactly."""
+    return items[rank::world_size] if world_size > 1 else items
+
+
 def build_segmentation_training_jsons(
     data_dir: Path,
     raw_dir: Path,
@@ -511,6 +545,12 @@ def build_segmentation_training_jsons(
     image_root: Path = None,
     resize_mode: str = "aspect",
     output_root: Path = None,
+    train_jsonl: Path = None,
+    val_jsonl: Path = None,
+    test_jsonl: Path = None,
+    limits: dict = None,
+    rank: int = 0,
+    world_size: int = 1,
 ) -> None:
     """
     Build data/seg_training/{train,val,test}.jsonl from data/{train,val,test}.jsonl.
@@ -552,31 +592,63 @@ def build_segmentation_training_jsons(
          precompute_segmentation_maps.)
 
     Args:
-      data_dir         : folder with train.jsonl / val.jsonl / test.jsonl.
+      data_dir         : folder with train.jsonl / val.jsonl / test.jsonl. May
+                         be None if train_jsonl/val_jsonl/test_jsonl (below)
+                         cover every split you need -- mirrors
+                         grounded_sam_map_calculations.py's own
+                         explicit-paths-only mode.
+      train_jsonl, val_jsonl, test_jsonl : explicit per-split path, overrides
+                         data_dir's auto-discovery for that split, or works
+                         standalone with no data_dir at all.
       manifest_out     : where the three-field manifests are written. None
                          (default) = same folder the PNGs landed in.
       image_path       : key in the source JSONL holding the image path (e.g. "target").
       image_root       : optional root prepended to RELATIVE image paths.
       subset_n         : if set, only the first N entries per split (dry run).
+                         limits (below) takes priority per-split when given.
+      limits           : optional {"train"/"val"/"test": int|None} -- per-split
+                         cap, overriding subset_n for that split. Mirrors
+                         grounded_sam_map_calculations.py's own
+                         --limit_train/--limit_val/--limit_test.
+      rank, world_size : (multi-task/SLURM) shard the per-image COMPUTE step
+                         across several instances of this process, one per
+                         GPU -- mirrors grounded_sam_map_calculations.py's own
+                         --rank/--world_size exactly, including WHERE the
+                         sharding happens: dataset_root/sibling_root and the
+                         collision guard below still run against the FULL,
+                         unsharded image list in every instance (so every
+                         rank derives the identical root/location), and only
+                         the final precompute+manifest-row step is sharded.
+                         Default rank=0/world_size=1 -- nothing changes for a
+                         normal single-GPU run.
       raw_dir, seg_dir : legacy args, no longer used for saving (the sibling
                          folder is derived from the images). Kept so the CLI
                          stays backward-compatible.
     """
     cwd = Path.cwd()
     _root = image_root if image_root is not None else cwd
+    _explicit = {"train": train_jsonl, "val": val_jsonl, "test": test_jsonl}
+    _limits = limits or {}
 
     # ---- Step 0: read all splits, resolve images, find ONE dataset root ---- #
     split_entries = {}   # split -> list[entry]
     split_images  = {}   # split -> list[abs Path], aligned 1:1 with entries
     all_images    = []
     for split in ["train", "val", "test"]:
-        src_path = _find_split_jsonl(data_dir, split)
+        if _explicit[split] is not None:
+            src_path = Path(_explicit[split])
+        elif data_dir is not None:
+            src_path = _find_split_jsonl(data_dir, split)
+        else:
+            src_path = None
         if src_path is None:
-            print(f"\n[WARN] No JSONL for split '{split}' found in {data_dir} — skipping.")
+            print(f"\n[WARN] No JSONL for split '{split}' found/given"
+                  + (f" in {data_dir}" if data_dir is not None else "") + " — skipping.")
             continue
+        _split_limit = _limits.get(split, subset_n)
         with open(src_path, "r", encoding="utf-8") as f:
             all_entries = [json.loads(line) for line in f if line.strip()]
-        entries = all_entries[:subset_n] if subset_n else all_entries
+        entries = all_entries[:_split_limit] if _split_limit else all_entries
         abs_paths = []
         for entry in entries:
             p = Path(_get_image_path(entry, image_path))
@@ -667,12 +739,18 @@ def build_segmentation_training_jsons(
     for split in ["train", "val", "test"]:
         if split not in split_entries:
             continue
-        entries         = split_entries[split]
-        abs_image_paths = split_images[split]
+        # Sharded HERE, after dataset_root/sibling_root/collision-guard above
+        # already ran against the FULL, unsharded list -- every rank derives
+        # the identical root/location, only the actual compute is split.
+        # Mirrors grounded_sam_map_calculations.py's own _shard ordering.
+        _pairs = _shard(list(zip(split_entries[split], split_images[split])), rank, world_size)
+        entries         = [e for e, _p in _pairs]
+        abs_image_paths = [p for _e, p in _pairs]
 
         print(f"\n{'='*56}")
-        print(f"  {split}: processing {len(entries)} entries"
-              + (" (dry-run subset)" if subset_n else ""))
+        desc_suffix = f" (dry-run subset)" if subset_n else ""
+        desc_suffix += f"  [rank {rank}/{world_size}]" if world_size > 1 else ""
+        print(f"  {split}: processing {len(entries)} entries{desc_suffix}")
         print(f"{'='*56}")
 
         path_to_seg = precompute_segmentation_maps(
@@ -717,7 +795,13 @@ def build_segmentation_training_jsons(
                 "ground_truth":   _gt,
             })
 
-        out_path = manifest_root / f"{split}.jsonl"
+        # Multi-task runs: each instance writes its OWN rank-suffixed manifest
+        # (never a shared file -- N processes writing the same path would
+        # race/clobber). Merge them yourself once every task is done, e.g.
+        # cat train_rank*.jsonl > train.jsonl -- mirrors
+        # grounded_sam_map_calculations.py's own identical convention.
+        _rank_suffix = f"_rank{rank}" if world_size > 1 else ""
+        out_path = manifest_root / f"{split}{_rank_suffix}.jsonl"
         with open(out_path, "w", encoding="utf-8") as f:
             for entry in out_entries:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -1269,7 +1353,55 @@ def main():
         "--data_dir", type=str, default=None,
         help="Folder with train.jsonl/val.jsonl/test.jsonl (e.g. data/). "
              "Any *.jsonl whose stem contains 'train'/'val'/'test' is also accepted. "
-             "Activates seg-training JSONL mode -> data/seg_training/*.jsonl.",
+             "Activates seg-training JSONL mode -> data/seg_training/*.jsonl. "
+             "--train_jsonl/--val_jsonl/--test_jsonl override this per split, or "
+             "work standalone with no --data_dir at all (mirrors "
+             "grounded_sam_map_calculations.py's own --data_dir mode exactly).",
+    )
+    parser.add_argument(
+        "--train_jsonl", type=str, default=None,
+        help="(--data_dir mode) Explicit path for the train split -- overrides "
+             "--data_dir's auto-discovery for it, or works standalone with no "
+             "--data_dir at all (--output_root is then required, since there's "
+             "no dataset-root folder to default a sibling location from).",
+    )
+    parser.add_argument(
+        "--val_jsonl", type=str, default=None,
+        help="(--data_dir mode) Explicit path for the val split -- same rules as --train_jsonl.",
+    )
+    parser.add_argument(
+        "--test_jsonl", type=str, default=None,
+        help="(--data_dir mode) Explicit path for the test split -- same rules as --train_jsonl.",
+    )
+    parser.add_argument(
+        "--limit_train", type=int, default=None,
+        help="(--data_dir mode) Cap on train images (e.g. half the dataset). "
+             "Independent of --dry_run_n, which every OTHER mode uses instead.",
+    )
+    parser.add_argument(
+        "--limit_val", type=int, default=None,
+        help="(--data_dir mode) Cap on val images.",
+    )
+    parser.add_argument(
+        "--limit_test", type=int, default=None,
+        help="(--data_dir mode) Cap on test images.",
+    )
+    parser.add_argument(
+        "--rank", type=int, default=0,
+        help="(--data_dir mode, multi-task/SLURM) This invocation's shard index, "
+             "0-based -- e.g. --rank $SLURM_PROCID. Default 0 (process the whole "
+             "list yourself) -- nothing changes for a normal single-GPU run. "
+             "Mirrors grounded_sam_map_calculations.py's own --rank exactly: this "
+             "script stays single-process per invocation, launch it once PER GPU "
+             "yourself (srun --ntasks-per-node=N ...) for SLURM-driven multi-GPU -- "
+             "see seg_map_calculations_multi_GPU.py instead for a single in-process "
+             "auto-detect-all-GPUs run.",
+    )
+    parser.add_argument(
+        "--world_size", type=int, default=1,
+        help="(--data_dir mode, multi-task/SLURM) Total number of parallel "
+             "instances sharding the work, e.g. --world_size $SLURM_NTASKS. "
+             "Default 1.",
     )
     parser.add_argument(
         "--raw_dir", type=str, default=None,
@@ -1453,9 +1585,22 @@ def main():
     )
     args = parser.parse_args()
 
-    _setup_logging(PROJECT_ROOT / "outputs" / "logs")
+    # --train_jsonl/--val_jsonl/--test_jsonl activate --data_dir mode the same
+    # way --data_dir itself does (mirrors grounded_sam_map_calculations.py's
+    # own explicit-paths-only mode) -- this lets --data_dir mode run with NO
+    # --data_dir at all, just explicit per-split paths.
+    _explicit_split_jsonl = bool(args.train_jsonl or args.val_jsonl or args.test_jsonl)
+    _data_dir_mode_active = bool(args.data_dir or _explicit_split_jsonl)
 
-    if not any([args.dataset_dir, args.data_dir, args.input_dir,
+    if args.world_size < 1:
+        parser.error("--world_size must be >= 1.")
+    if not (0 <= args.rank < args.world_size):
+        parser.error(f"--rank {args.rank} must be in [0, --world_size={args.world_size}).")
+
+    _setup_logging(PROJECT_ROOT / "outputs" / "logs",
+                    args.rank if args.world_size > 1 else None)
+
+    if not any([args.dataset_dir, _data_dir_mode_active, args.input_dir,
                 args.image, args.json_file]):
         parser.error(
             "Provide one of:\n"
@@ -1463,24 +1608,33 @@ def main():
             "  --json_file path/to/list.jsonl   (one manifest — maps to sibling _seg_map_<mode> folder + <stem>_seg.jsonl)\n"
             "  --dataset_dir /data/custome_dataset --data_dir data/  (scan mode — saves maps to a sibling folder)\n"
             "  --data_dir data/   (builds data/seg_training_<mode>/*.json from JSONL paths)\n"
+            "  --train_jsonl/--val_jsonl/--test_jsonl   (--data_dir mode, explicit per-split paths, "
+            "with or without --data_dir)\n"
             "  --input_dir data/raw   (directory mode — PNGs only, no JSON)\n"
             "All modes accept --resize_mode aspect (default, only mode supported)."
         )
     _n_modes = sum(bool(m) for m in
-                   [args.dataset_dir, args.data_dir, args.input_dir,
+                   [args.dataset_dir, _data_dir_mode_active, args.input_dir,
                     args.image, args.json_file])
     if _n_modes > 1 and not (args.dataset_dir and args.data_dir):
         # (--dataset_dir legitimately REQUIRES --data_dir; every other pairing
         # is ambiguous — refuse instead of guessing which mode was meant.)
         parser.error("Pass only ONE mode flag (--image / --json_file / "
-                     "--dataset_dir / --data_dir / --input_dir).")
-    if args.data_dir and args.input_dir:
-        parser.error("--data_dir and --input_dir are mutually exclusive.")
+                     "--dataset_dir / --data_dir[/--train_jsonl/--val_jsonl/--test_jsonl] / --input_dir).")
+    if _data_dir_mode_active and args.input_dir:
+        parser.error("--data_dir mode and --input_dir are mutually exclusive.")
     if args.dataset_dir and not args.data_dir:
         parser.error(
             "--dataset_dir (scan mode) also needs --data_dir pointing at the folder that "
             "holds train/val/test.jsonl — that is where each image's prompt + split come from.\n"
             "  Example: --dataset_dir /data/custome_dataset --data_dir data/ --image_path target"
+        )
+    if _explicit_split_jsonl and not args.data_dir and not args.output_root:
+        parser.error(
+            "--output_root is required when using --train_jsonl/--val_jsonl/--test_jsonl "
+            "with no --data_dir -- explicit-paths-only mode has no dataset root to default "
+            "a sibling seg-map folder from (mirrors grounded_sam_map_calculations.py's own "
+            "identical requirement)."
         )
 
     # ---- Resolve --size vs --width/--height into one `seg_size` value ------ #
@@ -1593,15 +1747,23 @@ def main():
             resize_mode=args.resize_mode,
         )
 
-    elif args.data_dir:
-        data_dir  = Path(args.data_dir).resolve()
-        raw_dir   = Path(args.raw_dir).resolve()   if args.raw_dir  else data_dir / "raw"
-        seg_dir   = Path(args.seg_dir).resolve()   if args.seg_dir  else data_dir / "raw_seg"
+    elif _data_dir_mode_active:
+        data_dir  = Path(args.data_dir).resolve() if args.data_dir else None
+        # raw_dir/seg_dir default off data_dir when given; with no data_dir
+        # at all (explicit-paths-only mode), fall back to image_root or cwd --
+        # there's no dataset_dir/raw|raw_seg convention to default from.
+        raw_dir   = (Path(args.raw_dir).resolve() if args.raw_dir
+                     else (data_dir / "raw" if data_dir is not None else None))
+        seg_dir   = (Path(args.seg_dir).resolve() if args.seg_dir
+                     else (data_dir / "raw_seg" if data_dir is not None else None))
         if args.dry_run_n:
             print(f"\n[DRY RUN] First {args.dry_run_n} entries per JSON.")
         image_root = Path(args.image_root).resolve() if args.image_root else None
         if image_root:
             print(f"Image root : {image_root}  (prepended to relative image paths)")
+        if args.world_size > 1:
+            print(f"Multi-task : rank {args.rank}/{args.world_size} "
+                  f"(each instance writes its own train_rank{{N}}.jsonl etc. -- merge yourself)")
         # output_root/manifest_out resolved to actual paths INSIDE
         # build_segmentation_training_jsons (None passed through as-is means
         # "use the default") -- unlike scan mode above, this mode's default
@@ -1609,7 +1771,8 @@ def main():
         # scanning the real images the manifest references (see that
         # function's own docstring), so there's nothing to pre-resolve.
         build_segmentation_training_jsons(
-            data_dir=data_dir, raw_dir=raw_dir if args.raw_dir else (image_root or data_dir / "raw"),
+            data_dir=data_dir,
+            raw_dir=raw_dir if args.raw_dir else (image_root or raw_dir),
             seg_dir=seg_dir,
             manifest_out=Path(args.manifest_out).resolve() if args.manifest_out else None,
             size=args.size, batch_size=args.batch_size, model_name=args.model,
@@ -1620,6 +1783,11 @@ def main():
             image_root=image_root,
             resize_mode=args.resize_mode,
             output_root=Path(args.output_root).resolve() if args.output_root else None,
+            train_jsonl=Path(args.train_jsonl).resolve() if args.train_jsonl else None,
+            val_jsonl=Path(args.val_jsonl).resolve() if args.val_jsonl else None,
+            test_jsonl=Path(args.test_jsonl).resolve() if args.test_jsonl else None,
+            limits={"train": args.limit_train, "val": args.limit_val, "test": args.limit_test},
+            rank=args.rank, world_size=args.world_size,
         )
     else:
         run_seg_directory_mode(args)
