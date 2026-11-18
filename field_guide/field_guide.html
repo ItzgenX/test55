@@ -1191,6 +1191,21 @@ for layer in all_patched_lora_layers: layer.lora_scale = scale</code></pre>
       </div>
     </section>
 
+    <section class="lesson" id="l31">
+      <div class="lesson-kicker"><span class="lesson-num">31</span><span class="tag">Evaluation</span></div>
+      <h2 class="lesson-title">Scoring a finished inference run: mIoU on maps, FID on images</h2>
+      <div class="panel concept">
+        <p class="panel-eyebrow"><span class="dot"></span>Concept</p>
+        <p>Two different questions, two different inputs. <b>mIoU</b> (controllability) compares <em>segmentation maps</em>: the map an image was generated FROM vs. the map the same segmenter sees in the generated image. <b>FID</b> (realism) compares <em>RGB images</em>: real vs. generated distributions. Both mIoU sides come from SegFormer, not human labels, so it measures layout-following as SegFormer sees it -- and it is not directly comparable with grounded_sam's mIoU (different segmenter, 19 vs 28 classes). FID on the same test images is the cross-branch number.</p>
+      </div>
+      <div class="panel repo">
+        <p class="panel-eyebrow"><span class="dot"></span>In this repo</p>
+        <p><span class="fileref">segformer_evaluate.py</span> (2026-11-18, port of grounded_sam's <span class="mono">grounded_sam_evaluate.py</span>) takes an inference run folder + the manifest it used, matches generated images by seg-map stem (default and <span class="mono">save_generated_only</span> layouts; RAW SEG GEN excluded), segments them with <span class="mono">SegmentationEncoder</span> through the same <span class="mono">build_seg_preprocess</span> path <span class="fileref">seg_map_calculations.py</span> uses, and writes <span class="mono">eval/metrics.txt</span> (mean per-image mIoU, dataset mIoU, per-class IoU named from SegFormer's own <span class="mono">id2label</span>, FID), <span class="mono">eval_pairs.jsonl</span>, <span class="mono">miou_per_image.csv</span>, <span class="mono">gen_seg/</span>, <span class="mono">miou_viz/</span>.</p>
+        <p><b>Verified by real execution (mIoU path):</b> on GPU against the 2026-09-01 inference run + <span class="mono">seg_training_aspect/test.jsonl</span>: 10/10 matched, mean mIoU 0.018 -- consistent with that run's own inline metrics.txt (0.019; small gap = JPEG save). The low value is genuine: that run used a smoke-test checkpoint at 5 denoising steps. Pipeline sanity check: segmenting the REAL images through the script reproduces their stored maps at mIoU 0.995-0.999 (99.99% pixel agreement), proving preprocessing parity. <b>FID path not yet executed</b> (torch_fidelity not installed in any env on this machine).</p>
+        <p><b>Found alongside:</b> <span class="mono">configs/experiment/train_seg_cluster.yaml</span> still selected the RGB <span class="mono">fsmXL</span> mapper -- stale since the 2026-08-25 class-ID switch, while its data loader sends class IDs and inference expects <span class="mono">segidXL</span>. Fixed to <span class="mono">segidXL</span> (grounded_sam's cluster config already had this).</p>
+      </div>
+    </section>
+
     <!-- ============================================================ -->
     <!-- GLOSSARY -->
     <!-- ============================================================ -->
