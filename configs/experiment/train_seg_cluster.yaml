@@ -21,7 +21,7 @@
 defaults:
   - /lora@lora.struct: struct
   - override /lora/encoder@lora.struct.encoder: identity           # unused at train time: skip_encode=True bypasses it
-  - override /lora/mapper_network@lora.struct.mapper_network: fsmXL  # SDXL has 3 UNet stages, not 4
+  - override /lora/mapper_network@lora.struct.mapper_network: segidXL  # class-ID embedding conditioning, not RGB colorize -- must match train_seg.yaml, inference_seg.yaml and data.conditioning=classid (was fsmXL: stale since the 2026-08-25 class-ID switch)
   - override /model: sdxl
   - override /data: segformer_jsonl
   - _self_
